@@ -1,10 +1,11 @@
 'use strict';
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
 const $ = id => document.getElementById(id);
-const MAX_BYTES = 200000;
+let limitBytes = 200000;
 let sources = [], items = [], results = [], format = 'jpg', mode = 'merge';
 let busy = false, cancelled = false, idCounter = 0, thumbnailChain = Promise.resolve();
 let previewUrl = null, thumbnailObserver;
+let previewPdf = null, previewTask = null, previewSerial = 0, pageRenderSerial = 0, currentPdfPage = 1;
 const nextId = prefix => prefix + (++idCounter);
 const size = bytes => bytes < 1000000 ? (bytes / 1000).toFixed(1) + ' KB' : (bytes / 1000000).toFixed(1) + ' MB';
 const message = value => {$('message').textContent = value;};
@@ -32,12 +33,15 @@ function refreshSelection() {
   const count = selectedItems().length;
   $('selection-count').textContent = items.length ? '已选 ' + count + ' / ' + items.length + ' 项' : '尚未添加材料';
   $('selection-count').classList.toggle('empty-selection', items.length > 0 && count === 0);
-  $('convert').disabled = busy || count === 0;
-  $('convert').replaceChildren(document.createTextNode(mode === 'merge' ? '生成长图并压缩 ' : '转换所选项并压缩 '), element('span', '', '↗'));
-  $('limit-label').textContent = mode === 'merge' ? '整张长图大小' : '每张图片大小';
-  $('format-hint').textContent = (mode === 'merge'
-    ? '整张长图不超过 200,000 字节。内容越多，压缩后文字可能越小；建议仅选择本次需要的材料，导出后放大检查。'
-    : '每个所选项单独导出，每张不超过 200,000 字节。') + (format === 'png' ? ' PNG 按尺寸压缩，复杂材料建议选择 JPG。' : '');
+  const isPdf = format === 'pdf', bound = size(limitBytes);
+  $('convert').disabled = busy || count === 0 || !$('size-value').checkValidity();
+  $('convert').replaceChildren(document.createTextNode(mode === 'merge' ? (isPdf ? '生成 PDF 并压缩 ' : '生成长图并压缩 ') : '转换所选项并压缩 '), element('span', '', '↗'));
+  $('merge-title').textContent = isPdf ? '合并为一个 PDF' : '合并为一张长图';
+  $('merge-description').textContent = isPdf ? '所选内容依次排列，每项一页' : '所选内容依次纵向拼接';
+  $('limit-label').textContent = isPdf ? (mode === 'merge' ? '整个 PDF 大小上限' : '每个 PDF 大小上限') : (mode === 'merge' ? '整张长图大小上限' : '每张图片大小上限');
+  $('format-note').textContent = isPdf ? '图片化 PDF，可翻页查看；文字不可选择' : (format === 'png' ? 'PNG 通过调整尺寸控制大小' : 'JPG / JPEG 编码相同，扩展名不同');
+  $('output-summary').textContent = count + ' 个所选项 → ' + (mode === 'merge' ? (isPdf ? '1 个 PDF' : '1 张长图') : count + ' 个文件') + ' · 每个 ≤ ' + bound;
+  $('format-hint').textContent = (mode === 'merge' ? (isPdf ? '整个 PDF' : '整张长图') : '每个输出文件') + '不超过 ' + limitBytes.toLocaleString('zh-CN') + ' 字节。实际文件可能更小；上限越低、内容越多，清晰度可能越低，请放大检查。';
   for (const source of sources) {
     const members = items.filter(item => item.sourceId === source.id), checked = members.filter(item => item.selected).length;
     const input = document.querySelector('[data-file-check="' + source.id + '"]');
@@ -51,6 +55,21 @@ function refreshSelection() {
     if (input) input.checked = item.selected;
   }
 }
+function setLimit(kb, updateInput = true) {
+  limitBytes = Math.round(Math.max(50, Math.min(10000, kb))) * 1000;
+  if (updateInput) $('size-value').value = limitBytes / 1000;
+  $('size-slider').value = Math.round(Math.log(limitBytes / 50000) / Math.log(200) * 1000);
+  $('size-slider').setAttribute('aria-valuetext', size(limitBytes));
+  refreshSelection();
+}
+$('size-slider').oninput = e => {if (!busy) setLimit(Math.round(50 * Math.pow(200, Number(e.target.value) / 1000) / 10) * 10);};
+$('size-value').oninput = e => {
+  if (busy) return;
+  if (e.target.checkValidity() && e.target.value !== '') setLimit(e.target.valueAsNumber, false);
+  else $('convert').disabled = true;
+};
+$('size-value').onchange = e => {if (!busy) setLimit(e.target.value !== '' && Number.isFinite(e.target.valueAsNumber) ? e.target.valueAsNumber : limitBytes / 1000);};
+$('reset-size').onclick = () => {if (!busy) setLimit(200);};
 function showProgress(text, value = 0) {
   $('progress-area').hidden = false; $('progress-text').textContent = text; $('progress').value = value;
 }
@@ -226,6 +245,7 @@ for (const button of document.querySelectorAll('[data-mode]')) button.onclick = 
   document.querySelectorAll('[data-mode]').forEach(b => {b.classList.toggle('selected', b === button); b.setAttribute('aria-pressed', String(b === button));}); refreshSelection();
 };
 function openPreview(url, name) {
+  disposePdfPreview(); $('pdf-preview-nav').hidden = true;
   $('preview-image').classList.remove('actual-size'); $('preview-zoom').textContent = '原尺寸查看';
   $('preview-image').src = url; $('preview-image').alt = name; $('preview-title').textContent = name; $('preview').showModal(); $('preview-scroll').scrollTop = 0;
 }
@@ -245,26 +265,73 @@ async function previewItem(item) {
 $('preview-zoom').onclick = () => {const actual = $('preview-image').classList.toggle('actual-size'); $('preview-zoom').textContent = actual ? '适应窗口' : '原尺寸查看';};
 $('close-preview').onclick = () => $('preview').close();
 $('preview').onclick = e => {if (e.target === $('preview')) $('preview').close();};
-$('preview').onclose = () => {if (previewUrl) {URL.revokeObjectURL(previewUrl); previewUrl = null;} $('preview-image').removeAttribute('src');};
+$('preview').onclose = () => {disposePdfPreview(); if (previewUrl) {URL.revokeObjectURL(previewUrl); previewUrl = null;} $('preview-image').removeAttribute('src');};
+function disposePdfPreview() {
+  previewSerial++; pageRenderSerial++;
+  const doc = previewPdf, task = previewTask; previewPdf = null; previewTask = null;
+  if (doc) doc.destroy().catch(() => {}); else if (task) task.destroy().catch(() => {});
+}
+async function openPdfPreview(result) {
+  disposePdfPreview(); const serial = previewSerial;
+  $('preview-image').src = result.previewUrl; $('preview-image').alt = result.name;
+  $('preview-image').classList.remove('actual-size'); $('preview-zoom').textContent = '原尺寸查看';
+  $('preview-title').textContent = result.name; $('pdf-preview-nav').hidden = false;
+  $('pdf-prev').disabled = $('pdf-next').disabled = true; $('pdf-page-count').textContent = '正在读取 PDF…';
+  $('preview').showModal(); $('preview-scroll').scrollTop = 0;
+  try {
+    const bytes = await result.blob.arrayBuffer(); if (serial !== previewSerial) return;
+    previewTask = pdfjsLib.getDocument({data:bytes,isEvalSupported:false});
+    const doc = await previewTask.promise;
+    if (serial !== previewSerial) {await doc.destroy(); return;}
+    previewPdf = doc; await renderPdfPreviewPage(1);
+  } catch {if (serial === previewSerial) $('pdf-page-count').textContent = '预览失败，请下载后查看';}
+}
+async function renderPdfPreviewPage(number) {
+  const doc = previewPdf; if (!doc) return;
+  const render = ++pageRenderSerial; let canvas;
+  $('pdf-prev').disabled = $('pdf-next').disabled = true;
+  try {
+    const page = await doc.getPage(number), base = page.getViewport({scale:1});
+    const view = page.getViewport({scale:Math.min(2,1400/base.width,5000/base.height,Math.sqrt(8000000/(base.width*base.height)))});
+    canvas = document.createElement('canvas'); canvas.width = Math.max(1,Math.round(view.width)); canvas.height = Math.max(1,Math.round(view.height));
+    await page.render({canvasContext:canvas.getContext('2d'),viewport:view,background:'#fff'}).promise;
+    const blob = await new Promise(resolve => canvas.toBlob(resolve,'image/png'));
+    if (render !== pageRenderSerial || !blob) return;
+    if (previewUrl) URL.revokeObjectURL(previewUrl); previewUrl = URL.createObjectURL(blob);
+    $('preview-image').src = previewUrl; currentPdfPage = number;
+    $('pdf-page-count').textContent = '第 ' + number + ' / ' + doc.numPages + ' 页';
+    $('preview-scroll').scrollTop = 0;
+  } catch {if (render === pageRenderSerial) $('pdf-page-count').textContent = '此页预览失败，请下载后查看';}
+  finally {
+    if (canvas) canvas.width = canvas.height = 1;
+    if (render === pageRenderSerial) {$('pdf-prev').disabled = number <= 1; $('pdf-next').disabled = number >= doc.numPages;}
+  }
+}
+$('pdf-prev').onclick = () => renderPdfPreviewPage(Math.max(1,currentPdfPage-1));
+$('pdf-next').onclick = () => renderPdfPreviewPage(Math.min(previewPdf?.numPages || 1,currentPdfPage+1));
 function clearResults() {
   if ($('preview').open) $('preview').close();
-  results.forEach(result => URL.revokeObjectURL(result.url)); results = []; $('cards').replaceChildren(); $('results').hidden = true;
+  results.forEach(result => {URL.revokeObjectURL(result.url); if (result.previewUrl !== result.url) URL.revokeObjectURL(result.previewUrl);});
+  results = []; $('cards').replaceChildren(); $('results').hidden = true;
 }
 $('clear').onclick = clearResults;
 function addResult(result) {
-  if (result.blob.size > MAX_BYTES) throw new Error('图片大小超出限制');
-  result.url = URL.createObjectURL(result.blob); results.push(result); $('results').hidden = false;
+  if (result.blob.size > result.limitBytes) throw new Error('文件大小超出所选上限');
+  result.url = URL.createObjectURL(result.blob);
+  result.previewUrl = result.cover ? URL.createObjectURL(result.cover.blob) : result.url;
+  results.push(result); $('results').hidden = false;
   const card = element('article', 'card'), thumb = element('button', 'thumb');
   thumb.setAttribute('aria-label', '预览结果 ' + result.name);
-  const image = new Image(); image.src = result.url; image.alt = result.name; image.loading = 'lazy'; thumb.append(image);
-  thumb.onclick = () => openPreview(result.url, result.name);
+  const image = new Image(); image.src = result.previewUrl; image.alt = result.name + (result.pageCount ? '（首页）' : ''); image.loading = 'lazy'; thumb.append(image);
+  if (result.pageCount) thumb.append(element('span','file-type','PDF · ' + result.pageCount + ' 页'));
+  thumb.onclick = () => result.pageCount ? openPdfPreview(result) : openPreview(result.url, result.name);
   const body = element('div', 'card-body'), name = element('b', '', result.name); name.title = result.name;
   const meta = element('div', 'card-meta');
-  meta.append(element('span', '', result.width + ' × ' + result.height + ' px'), element('span','badge',size(result.blob.size) + ' ✓'));
+  meta.append(element('span', '', result.pageCount ? result.pageCount + ' 页 · PDF' : result.width + ' × ' + result.height + ' px'), element('span','badge',size(result.blob.size) + ' ✓'));
   const bottom = element('div', 'card-bottom');
-  const warning = Math.min(result.width,result.height) < 600 || result.parts > 4 ? '请放大检查文字清晰度' : '点击图片可放大检查';
-  const link = element('a', '', '下载 ↓'); link.href = result.url; link.download = result.name;
-  bottom.append(element('span', '', warning), link); body.append(name, meta);
+  const warning = result.pageCount ? '点击预览，可逐页检查' : (Math.min(result.width,result.height) < 600 || result.parts > 4 ? '请放大检查文字清晰度' : '点击图片可放大检查');
+  const link = element('a', '', result.pageCount ? '下载 PDF ↓' : '下载 ↓'); link.href = result.url; link.download = result.name;
+  bottom.append(element('span', '', warning), link); body.append(name, meta, element('p','result-limit','本次上限：' + size(result.limitBytes)));
   if (result.parts) body.append(element('p', 'card-origin', result.parts + ' 项材料 · ' + result.sourceNames.join(' → ')));
   body.append(bottom); card.append(thumb, body); $('cards').append(card);
 }
@@ -284,12 +351,24 @@ function planLongImage(batch) {
 $('cancel').onclick = () => {cancelled = true; $('cancel').disabled = true; $('progress-text').textContent = '正在取消，当前步骤结束后停止…';};
 $('convert').onclick = async () => {
   const batch = selectedItems(); if (busy || !batch.length) return;
-  const runMode = mode, runFormat = format; setBusy(true); resetCancellation(); message(''); clearResults();
+  if (!$('size-value').checkValidity()) return;
+  const runMode = mode, runFormat = format, runLimit = limitBytes; setBusy(true); resetCancellation(); message(''); clearResults();
   $('cards').classList.toggle('single-result', runMode === 'merge');
   showProgress('正在准备所选材料…'); const errors = [];
   try {
     await thumbnailChain; abortIfCancelled();
-    if (runMode === 'merge') {
+    if (runFormat === 'pdf') {
+      const batches = runMode === 'merge' ? [batch] : batch.map(item => [item]);
+      const names = new Set();
+      for (let group = 0; group < batches.length; group++) {
+        abortIfCancelled(); const pages = batches[group];
+        const output = await exportCompressedPdf(pages, item => renderItem(item,Math.min(2400,item.width*(item.kind==='pdf'?2.5:1)),5000), runLimit, () => cancelled, (i,total,attempt) => showProgress('正在生成 PDF · 文件 ' + (group+1) + '/' + batches.length + ' · 第 ' + (i+1) + '/' + total + ' 页' + (attempt ? '（调整压缩）' : ''), (group + i/total) / batches.length * 95));
+        abortIfCancelled();
+        const item = pages[0]; const stem = runMode === 'merge' ? '网申材料_合并_' + pages.length + '页' : item.fileName.replace(/\.(pdf|png|jpe?g)$/i,'') + (item.page ? '_第' + String(item.page).padStart(2,'0') + '页' : '');
+        let name = stem + '.pdf', suffix = 2; while (names.has(name)) name = stem + '_' + suffix++ + '.pdf'; names.add(name);
+        addResult({...output,name,limitBytes:runLimit,parts:pages.length,sourceNames:pages.map(itemLabel)});
+      }
+    } else if (runMode === 'merge') {
       const plan = planLongImage(batch), canvas = document.createElement('canvas');
       canvas.width = plan.width; canvas.height = plan.height;
       try {
@@ -301,9 +380,9 @@ $('convert').onclick = async () => {
           try {context.drawImage(part, 0, y, plan.width, plan.heights[index]);} finally {part.width = part.height = 1;}
           y += plan.heights[index]; await tick();
         }
-        abortIfCancelled(); showProgress('正在将整张长图压缩至 200KB 以内…',90);
-        const output = await compressCanvas(canvas,runFormat,MAX_BYTES,() => cancelled); abortIfCancelled();
-        addResult({...output,name:'网申材料_长图_' + batch.length + '项.' + runFormat,parts:batch.length,sourceNames:batch.map(itemLabel)});
+        abortIfCancelled(); showProgress('正在将整张长图压缩至 ' + size(runLimit) + ' 以内…',90);
+        const output = await compressCanvas(canvas,runFormat,runLimit,() => cancelled); abortIfCancelled();
+        addResult({...output,limitBytes:runLimit,name:'网申材料_长图_' + batch.length + '项.' + runFormat,parts:batch.length,sourceNames:batch.map(itemLabel)});
       } finally {canvas.width = canvas.height = 1;}
     } else {
       const names = new Set();
@@ -312,23 +391,23 @@ $('convert').onclick = async () => {
         showProgress('正在压缩 ' + (index + 1) + '/' + batch.length + ' · ' + itemLabel(item), index / batch.length * 100);
         try {
           canvas = await renderItem(item,Math.min(2400, item.width * (item.kind === 'pdf' ? 2.5 : 1)),5000);
-          const output = await compressCanvas(canvas,runFormat,MAX_BYTES,() => cancelled); abortIfCancelled();
+          const output = await compressCanvas(canvas,runFormat,runLimit,() => cancelled); abortIfCancelled();
           const stem = item.fileName.replace(/\.(pdf|png|jpe?g)$/i,'') + (item.page ? '_第' + String(item.page).padStart(2,'0') + '页' : '');
           let name = stem + '.' + runFormat, suffix = 2; while (names.has(name)) name = stem + '_' + suffix++ + '.' + runFormat;
-          names.add(name); addResult({...output,name});
+          names.add(name); addResult({...output,name,limitBytes:runLimit});
         } catch (error) {if (error.name === 'AbortError') throw error; errors.push(itemLabel(item) + '：处理失败，请检查材料后重试');}
         finally {if (canvas) canvas.width = canvas.height = 1;}
         await tick();
       }
     }
-    showProgress('处理完成 · 本次选择 ' + batch.length + ' 项，生成 ' + results.length + ' 张图片',100);
+    showProgress('处理完成 · 本次选择 ' + batch.length + ' 项，生成 ' + results.length + ' 个文件',100);
   } catch (error) {
-    if (error.name === 'AbortError') showProgress('已取消 · 已生成的图片仍可下载');
+    if (error.name === 'AbortError') showProgress('已取消 · 已生成的文件仍可下载');
     else {errors.push(error.message || '处理失败，请减少选择的材料后重试'); showProgress('本次处理未完成');}
   } finally {
-    $('count').textContent = results.length + ' 张图片';
-    $('download-all').textContent = results.length === 1 ? '下载图片 ↓' : '打包下载 ZIP ↓';
-    $('result-note').textContent = '这是本次处理的结果，修改选择后需重新生成。请放大检查文字是否清晰，再提交到网申系统。' + (results.length > 1 ? ' ZIP 需解压后上传图片。' : '');
+    $('count').textContent = results.length + ' 个文件';
+    $('download-all').textContent = results.length === 1 ? '下载文件 ↓' : '打包下载 ZIP ↓';
+    $('result-note').textContent = '这是本次处理的结果，修改选择、格式或大小上限后需重新生成。请放大检查文字是否清晰，再提交到网申系统。' + (results.length > 1 ? ' ZIP 需解压后上传其中的文件。' : '');
     setBusy(false); $('cancel').disabled = true; observeThumbnails(); message(errors.join('\n'));
   }
 };
@@ -340,7 +419,7 @@ $('download-all').onclick = async () => {
     const zip = new JSZip(); results.forEach(result => zip.file(result.name,result.blob));
     const blob = await zip.generateAsync({type:'blob',compression:'STORE'}), url = URL.createObjectURL(blob);
     downloadBlob(url,'网申材料.zip'); setTimeout(() => URL.revokeObjectURL(url),60000);
-  } catch {message('打包失败，请尝试逐张下载。');}
+  } catch {message('打包失败，请尝试逐个下载。');}
   finally {setBusy(false); $('download-all').textContent = '打包下载 ZIP ↓'; observeThumbnails();}
 };
-refreshSelection();
+setLimit(200);

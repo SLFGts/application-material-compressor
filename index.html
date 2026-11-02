@@ -2,34 +2,36 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="PDF、PNG、JPG、JPEG 本地压缩，自选文件及 PDF 页面，合并为一张 200KB 以内的长图。">
+<meta name="description" content="PDF、PNG、JPG、JPEG 本地压缩，自选文件及 PDF 页面，输出 PDF、PNG、JPG、JPEG，大小上限可调，默认 200KB。">
 <title>轻材料 · 网申材料压缩</title>
 <link rel="stylesheet" href="style.css">
-<script defer src="vendor/pdf.min.js"></script><script defer src="vendor/jszip.min.js"></script><script defer src="compress.js"></script><script defer src="app.js"></script>
+<script defer src="vendor/pdf.min.js"></script><script defer src="vendor/jszip.min.js"></script><script defer src="vendor/pdf-lib.min.js"></script><script defer src="compress.js"></script><script defer src="pdf-export.js"></script><script defer src="app.js"></script>
 </head>
 <body>
 <header><a class="brand" href="./"><span class="brand-icon">▤</span>轻材料<span class="tag">网申小助手</span></a><span class="privacy"><i></i> 文件仅在本机处理</span></header>
 <main>
-<section class="intro"><div class="eyebrow">LESS SIZE. MORE POSSIBILITY.</div><h1>材料轻一点，<br>离机会近一点<span>。</span></h1><p>PDF、图片一起处理。选好材料，拼成一张长图，压缩至 <strong>200KB 以内</strong>。</p></section>
+<section class="intro"><div class="eyebrow">LESS SIZE. MORE POSSIBILITY.</div><h1>材料轻一点，<br>离机会近一点<span>。</span></h1><p>PDF、图片自由转换。选择输出格式，拖动设置大小，<strong>默认 200KB</strong>。</p></section>
 <section class="workspace">
 <div class="workspace-head"><h2><span>01</span> 添加你的材料</h2><span>PDF / PNG / JPG / JPEG</span></div>
 <label id="drop" class="drop" tabindex="0" role="button" aria-label="选择材料文件"><input id="files" type="file" accept="application/pdf,image/png,image/jpeg,.pdf,.png,.jpg,.jpeg" multiple hidden><span class="upload-icon">↥</span><b>点击选择，或将文件拖到这里</b><span>支持 PDF、PNG、JPG、JPEG 混合上传 · 单份最大 50MB</span><small>可分批添加，稍后选择需要处理的文件或页面</small></label>
 <div id="queue" class="queue" aria-label="已上传文件"></div>
 <div id="selection" hidden>
 <div class="selection-heading"><h2><span>02</span> 选择与排序</h2><div class="selection-actions"><button id="select-all" class="text-button batch-control">全选</button><button id="select-none" class="text-button batch-control">全不选</button></div></div>
-<p class="selection-hint">勾选要处理的图片或 PDF 页面，用箭头调整顺序。长图将按下方从左到右、从上到下的顺序纵向拼接。</p>
+<p class="selection-hint">勾选要处理的图片或 PDF 页面，用箭头调整顺序。合并输出将按下方从左到右、从上到下的顺序排列。</p>
 <div id="items" class="items"></div>
 </div>
 <div class="output-settings"><div class="setting-title"><h2><span>03</span> 设置输出</h2><span id="selection-count" aria-live="polite">尚未添加材料</span></div>
-<div class="mode-options" role="group" aria-label="输出方式"><button type="button" data-mode="merge" class="mode-button selected batch-control" aria-pressed="true"><b>合并为一张长图</b><small>所选内容依次纵向拼接</small></button><button type="button" data-mode="separate" class="mode-button batch-control" aria-pressed="false"><b>分别导出图片</b><small>每个所选项单独压缩</small></button></div>
-<div class="options"><div><span class="field-label" id="format-label">输出格式</span><div class="segments" role="group" aria-labelledby="format-label"><button type="button" data-format="jpg" class="selected batch-control" aria-pressed="true">JPG <small>推荐 · 更清晰</small></button><button type="button" data-format="png" class="batch-control" aria-pressed="false">PNG</button></div></div><div class="limit"><span class="field-label" id="limit-label">整张长图大小</span><b>≤ 200 <small>KB</small><span>固定上限</span></b></div><button id="convert" class="primary" disabled>生成长图并压缩 <span>↗</span></button></div>
+<div class="mode-options" role="group" aria-label="输出方式"><button type="button" data-mode="merge" class="mode-button selected batch-control" aria-pressed="true"><b id="merge-title">合并为一张长图</b><small id="merge-description">所选内容依次纵向拼接</small></button><button type="button" data-mode="separate" class="mode-button batch-control" aria-pressed="false"><b>分别导出文件</b><small>每个所选项单独压缩</small></button></div>
+<div class="format-row"><div><span class="field-label" id="format-label">输出格式</span><div class="segments output-formats" role="group" aria-labelledby="format-label"><button type="button" data-format="pdf" class="batch-control" aria-pressed="false">PDF</button><button type="button" data-format="png" class="batch-control" aria-pressed="false">PNG</button><button type="button" data-format="jpg" class="selected batch-control" aria-pressed="true">JPG</button><button type="button" data-format="jpeg" class="batch-control" aria-pressed="false">JPEG</button></div></div><span class="format-note" id="format-note">JPG / JPEG 编码相同，扩展名不同</span></div>
+<div class="size-control"><div class="size-heading"><label for="size-slider" id="limit-label">整张长图大小上限</label><div class="size-entry"><span>≤</span><input id="size-value" class="batch-control" type="number" min="50" max="10000" step="1" value="200" aria-label="大小上限（KB）"><span>KB</span><button id="reset-size" class="text-button batch-control" type="button">恢复 200KB</button></div></div><input id="size-slider" class="batch-control" type="range" min="0" max="1000" step="1" value="262" aria-label="文件大小上限" aria-valuetext="200KB"><div class="size-ticks" aria-hidden="true"><span>50KB</span><span>200KB</span><span>1MB</span><span>10MB</span></div></div>
+<div class="generate-row"><span id="output-summary" aria-live="polite">所选材料 → 1 张长图 · ≤ 200KB</span><button id="convert" class="primary" disabled>生成长图并压缩 <span>↗</span></button></div>
 <p class="hint" id="format-hint">整张长图不超过 200,000 字节。内容越多，压缩后文字可能越小；建议仅选择本次需要的材料，导出后放大检查。</p>
 </div>
 <div class="progress-area" hidden id="progress-area"><div><span id="progress-text" role="status" aria-live="polite"></span><button id="cancel" class="text-button">取消</button></div><progress id="progress" max="100" value="0"></progress></div><p id="message" role="status" aria-live="polite"></p>
 </section>
 <section id="results" hidden><div class="result-heading"><div><div class="eyebrow">READY TO APPLY</div><h2>你的材料已就绪 <span id="count"></span></h2></div><div class="result-actions"><button id="clear" class="secondary">清空结果</button><button id="download-all" class="primary">下载长图 ↓</button></div></div><p class="result-note" id="result-note">这是本次处理的结果。请放大检查文字是否清晰，再提交到网申系统。</p><div id="cards" class="cards"></div></section>
-<section class="notes"><article><span>01 /</span><h3>混合材料，自由选择</h3><p>PDF、截图和照片一起添加，PDF 可细选到页，每次只处理勾选项。</p></article><article><span>02 /</span><h3>多份材料，一张长图</h3><p>调整好顺序，等宽纵向拼接为一张图片，也可选择分别导出。</p></article><article><span>03 /</span><h3>个人材料留在本机</h3><p>转换与压缩均在浏览器完成，材料不传送到服务器。</p></article></section>
-<footer><span>轻材料 · 为下一次出发做准备</span><span>DOCUMENT TO IMAGE / LOCAL & PRIVATE</span></footer>
+<section class="notes"><article><span>01 /</span><h3>混合材料，自由选择</h3><p>PDF、截图和照片一起添加，PDF 可细选到页，每次只处理勾选项。</p></article><article><span>02 /</span><h3>四种格式，大小自定</h3><p>输出 PDF、PNG、JPG 或 JPEG，调整大小上限，合并或分别导出。</p></article><article><span>03 /</span><h3>个人材料留在本机</h3><p>转换与压缩均在浏览器完成，材料不传送到服务器。</p></article></section>
+<footer><span>轻材料 · 为下一次出发做准备</span><span>DOCUMENT CONVERTER / LOCAL & PRIVATE</span></footer>
 </main>
-<dialog id="preview"><div class="preview-toolbar"><span id="preview-title">材料预览</span><div><button id="preview-zoom" class="secondary">原尺寸查看</button><button id="close-preview" class="secondary">关闭 ×</button></div></div><div id="preview-scroll"><img id="preview-image" alt="材料预览"></div></dialog>
+<dialog id="preview"><div class="preview-toolbar"><span id="preview-title">材料预览</span><div><button id="preview-zoom" class="secondary">原尺寸查看</button><button id="close-preview" class="secondary">关闭 ×</button></div></div><div id="pdf-preview-nav" class="pdf-preview-nav" hidden><button id="pdf-prev" class="secondary">上一页</button><span id="pdf-page-count" role="status"></span><button id="pdf-next" class="secondary">下一页</button></div><div id="preview-scroll"><img id="preview-image" alt="材料预览"></div></dialog>
 </body></html>

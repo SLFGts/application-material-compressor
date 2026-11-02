@@ -13,7 +13,7 @@ async function compressCanvas(source, format, limit = 200000, shouldCancel = () 
       let blob = await encode(.94); abort();
       if (blob.type !== mime) throw new Error('当前浏览器不支持所选图片格式');
       if (blob.size <= limit) return {blob, width, height};
-      if (format === 'jpg') {
+      if (format === 'jpg' || format === 'jpeg') {
         const minimum = await encode(.55); abort();
         if (minimum.size <= limit) {
           let low = .55, high = .94, best = minimum;
@@ -27,9 +27,9 @@ async function compressCanvas(source, format, limit = 200000, shouldCancel = () 
       }
       if (width === 1 && height === 1) break;
       const ratio = Math.max(.5,Math.min(.88,Math.sqrt(limit / blob.size) * .94));
-      width = Math.max(1,Math.floor(width * ratio)); height = Math.max(1,Math.floor(height * ratio));
+      width = Math.max(1,Math.floor(width * ratio)); height = Math.max(1,Math.round(width * source.height / source.width));
     }
-    throw new Error('无法将图片压缩到 200KB 以内，请减少选择的内容');
+    throw new Error('无法将图片压缩到 ' + Math.round(limit / 1000) + 'KB 以内，请提高上限或减少内容');
   } finally {canvas.width = canvas.height = 1;}
 }
 window.compressCanvas = compressCanvas;

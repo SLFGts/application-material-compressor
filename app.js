@@ -1,7 +1,12 @@
 'use strict';
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
 const $ = id => document.getElementById(id);
-let limitBytes = 200000;
+let limitBytes = 200000, resultSignature = '';
+function settingsSignature() {return JSON.stringify([format,mode,limitBytes,selectedItems().map(i=>[i.id,i.edits?.crop,(i.edits?.overlays||[]).map(o=>[o.id,o.x,o.y,o.w,o.h])])]);}
+function icon(name) {
+  const paths={up:'M12 19V5m-5 5 5-5 5 5',down:'M12 5v14m-5-5 5 5 5-5',close:'m6 6 12 12M6 18 18 6',download:'M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4',arrow:'M5 12h14m-5-5 5 5-5 5',check:'m5 12 4 4L19 6'};
+  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('fill','none');svg.setAttribute('stroke','currentColor');svg.setAttribute('stroke-width','1.7');svg.setAttribute('stroke-linecap','round');svg.setAttribute('stroke-linejoin','round');svg.setAttribute('aria-hidden','true');const path=document.createElementNS(svg.namespaceURI,'path');path.setAttribute('d',paths[name]);svg.append(path);return svg;
+}
 let sources = [], items = [], results = [], format = 'jpg', mode = 'merge';
 let busy = false, cancelled = false, idCounter = 0, thumbnailChain = Promise.resolve();
 let previewUrl = null, thumbnailObserver;
@@ -33,9 +38,15 @@ function refreshSelection() {
   const count = selectedItems().length;
   $('selection-count').textContent = items.length ? '已选 ' + count + ' / ' + items.length + ' 项' : '尚未添加材料';
   $('selection-count').classList.toggle('empty-selection', items.length > 0 && count === 0);
+  document.body.classList.toggle('has-materials',items.length>0);
+  $('empty-guidance').hidden=items.length>0;
+  $('material-total').textContent=sources.length ? sources.length+' 份文件' : '尚未添加文件';
+  $('item-total').textContent=items.length+' 项';
+  $('drop-title').textContent=items.length ? '继续添加材料' : '将材料拖到这里';
+  if (results.length) {const stale=resultSignature!==settingsSignature();$('result-note').classList.toggle('stale',stale);$('result-note').textContent=stale ? '材料或设置已修改。下方仍是上一次的结果，请重新生成后下载。' : '本次结果已生成。请放大检查文字是否清晰、页面是否完整，再提交到网申系统。'+(results.length>1?' ZIP 需解压后使用其中的文件。':'');}
   const isPdf = format === 'pdf', bound = size(limitBytes);
   $('convert').disabled = busy || count === 0 || !$('size-value').checkValidity();
-  $('convert').replaceChildren(document.createTextNode(mode === 'merge' ? (isPdf ? '生成 PDF 并压缩 ' : '生成长图并压缩 ') : '转换所选项并压缩 '), element('span', '', '↗'));
+  $('convert').replaceChildren(document.createTextNode(mode === 'merge' ? (isPdf ? '生成 PDF 并压缩 ' : '生成长图并压缩 ') : '转换所选项并压缩 '), icon('arrow'));
   $('merge-title').textContent = isPdf ? '合并为一个 PDF' : '合并为一张长图';
   $('merge-description').textContent = isPdf ? '所选内容依次排列，每项一页' : '所选内容依次纵向拼接';
   $('limit-label').textContent = isPdf ? (mode === 'merge' ? '整个 PDF 大小上限' : '每个 PDF 大小上限') : (mode === 'merge' ? '整张长图大小上限' : '每张图片大小上限');
@@ -84,7 +95,7 @@ function makeFileQueue() {
     const name = element('span', 'name', source.file.name); name.title = source.file.name;
     label.append(check, name);
     const info = element('small'); info.dataset.fileCount = source.id;
-    const remove = element('button', 'text-button', '×'); remove.dataset.remove = source.id; remove.disabled = busy;
+    const remove = element('button', 'text-button'); remove.append(icon('close')); remove.dataset.remove = source.id; remove.disabled = busy;
     remove.setAttribute('aria-label', '移除 ' + source.file.name);
     remove.onclick = async () => {
       if (busy) return;
@@ -125,7 +136,7 @@ function renderSelection() {
     const bottom = element('div', 'item-bottom'), controls = element('div');
     bottom.append(element('small', '', item.page ? '第 ' + item.page + ' 页' : item.width + ' × ' + item.height));
     for (const delta of [-1, 1]) {
-      const button = element('button', '', delta === -1 ? '↑' : '↓'); button.dataset.move = delta;
+      const button = element('button');button.append(icon(delta===-1?'up':'down')); button.dataset.move = delta;
       button.dataset.boundary = String(delta === -1 ? index === 0 : index === items.length - 1);
       button.disabled = busy || button.dataset.boundary === 'true';
       button.setAttribute('aria-label', (delta === -1 ? '前移 ' : '后移 ') + itemLabel(item)); button.onclick = () => moveItem(item, delta); controls.append(button);
@@ -339,7 +350,7 @@ function addResult(result) {
   if (result.blob.size > result.limitBytes) throw new Error('文件大小超出所选上限');
   result.url = URL.createObjectURL(result.blob);
   result.previewUrl = result.cover ? URL.createObjectURL(result.cover.blob) : result.url;
-  results.push(result); $('results').hidden = false;
+  results.push(result); resultSignature=settingsSignature(); $('results').hidden = false;
   const card = element('article', 'card'), thumb = element('button', 'thumb');
   thumb.setAttribute('aria-label', '预览结果 ' + result.name);
   const image = new Image(); image.src = result.previewUrl; image.alt = result.name + (result.pageCount ? '（首页）' : ''); image.loading = 'lazy'; thumb.append(image);
@@ -347,10 +358,10 @@ function addResult(result) {
   thumb.onclick = () => result.pageCount ? openPdfPreview(result) : openPreview(result.url, result.name);
   const body = element('div', 'card-body'), name = element('b', '', result.name); name.title = result.name;
   const meta = element('div', 'card-meta');
-  meta.append(element('span', '', result.pageCount ? result.pageCount + ' 页 · PDF · ' + (result.pdfMode==='native'?'保留原页面':'图片化压缩') : result.width + ' × ' + result.height + ' px'), element('span','badge',size(result.blob.size) + ' ✓'));
+  meta.append(element('span', '', result.pageCount ? result.pageCount + ' 页 · PDF · ' + (result.pdfMode==='native'?'保留原页面':'图片化压缩') : result.width + ' × ' + result.height + ' px'), element('span','badge',size(result.blob.size)+' · 已达标'));
   const bottom = element('div', 'card-bottom');
   const warning = result.pageCount ? '点击预览，可逐页检查' : (Math.min(result.width,result.height) < 600 || result.parts > 4 ? '请放大检查文字清晰度' : '点击图片可放大检查');
-  const link = element('a', '', result.pageCount ? '下载 PDF ↓' : '下载 ↓'); link.href = result.url; link.download = result.name;
+  const link = element('a', '', result.pageCount ? '下载 PDF' : '下载文件'); link.append(icon('download')); link.href = result.url; link.download = result.name;
   bottom.append(element('span', '', warning), link); body.append(name, meta, element('p','result-limit','本次上限：' + size(result.limitBytes)));
   if (result.parts) body.append(element('p', 'card-origin', result.parts + ' 项材料 · ' + result.sourceNames.join(' → ')));
   body.append(bottom); card.append(thumb, body); $('cards').append(card);
@@ -426,7 +437,7 @@ $('convert').onclick = async () => {
     else {errors.push(error.message || '处理失败，请减少选择的材料后重试'); showProgress('本次处理未完成');}
   } finally {
     $('count').textContent = results.length + ' 个文件';
-    $('download-all').textContent = results.length === 1 ? '下载文件 ↓' : '打包下载 ZIP ↓';
+    $('download-all').textContent = results.length === 1 ? '下载文件' : '打包下载 ZIP';
     $('result-note').textContent = '这是本次处理的结果，编辑页面或修改选择、格式、大小上限后需重新生成。请放大检查文字是否清晰，再提交到网申系统。' + (results.length > 1 ? ' ZIP 需解压后上传其中的文件。' : '');
     setBusy(false); $('cancel').disabled = true; observeThumbnails(); message(errors.join('\n'));
   }
@@ -440,6 +451,6 @@ $('download-all').onclick = async () => {
     const blob = await zip.generateAsync({type:'blob',compression:'STORE'}), url = URL.createObjectURL(blob);
     downloadBlob(url,'网申材料.zip'); setTimeout(() => URL.revokeObjectURL(url),60000);
   } catch {message('打包失败，请尝试逐个下载。');}
-  finally {setBusy(false); $('download-all').textContent = '打包下载 ZIP ↓'; observeThumbnails();}
+  finally {setBusy(false); $('download-all').textContent = '打包下载 ZIP'; observeThumbnails();}
 };
 setLimit(200);

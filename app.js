@@ -27,6 +27,7 @@ function element(tag, className, text) {
 }
 function setBusy(value) {
   busy = value;
+  if (!value && $('progress').value === 100) $('progress-area').hidden = true;
   $('files').disabled = value; $('drop').setAttribute('aria-disabled', String(value));
   $('clear').disabled = value; $('download-all').disabled = value || !results.length;
   document.querySelectorAll('.batch-control, [data-file-check], [data-item-check], [data-remove], [data-move], .item-thumb, .item-edit-button').forEach(control => {
@@ -36,22 +37,21 @@ function setBusy(value) {
 }
 function refreshSelection() {
   const count = selectedItems().length;
-  $('selection-count').textContent = items.length ? '已选 ' + count + ' / ' + items.length + ' 项' : '尚未添加材料';
+  $('selection-count').textContent = items.length ? '已选 ' + count + ' / ' + items.length + ' 项' : '';
   $('selection-count').classList.toggle('empty-selection', items.length > 0 && count === 0);
   document.body.classList.toggle('has-materials',items.length>0);
-  $('empty-guidance').hidden=items.length>0;
-  $('material-total').textContent=sources.length ? sources.length+' 份文件' : '尚未添加文件';
+  $('material-total').textContent=sources.length ? sources.length+' 份文件' : '';
   $('item-total').textContent=items.length+' 项';
-  $('drop-title').textContent=items.length ? '继续添加材料' : '将材料拖到这里';
-  if (results.length) {const stale=resultSignature!==settingsSignature();$('result-note').classList.toggle('stale',stale);$('result-note').textContent=stale ? '材料或设置已修改。下方仍是上一次的结果，请重新生成后下载。' : '本次结果已生成。请放大检查文字是否清晰、页面是否完整，再提交到网申系统。'+(results.length>1?' ZIP 需解压后使用其中的文件。':'');}
+  $('drop-title').textContent=items.length ? '添加文件' : '拖入文件，或点击添加';
+  if (results.length) {const stale=resultSignature!==settingsSignature();$('result-note').classList.toggle('stale',stale);$('result-note').textContent=stale ? '材料或设置已更改，请重新生成。' : '下载前请放大检查清晰度。'+(results.length>1?' ZIP 需解压后使用其中的文件。':'');}
   const isPdf = format === 'pdf', bound = size(limitBytes);
   $('convert').disabled = busy || count === 0 || !$('size-value').checkValidity();
-  $('convert').replaceChildren(document.createTextNode(mode === 'merge' ? (isPdf ? '生成 PDF 并压缩 ' : '生成长图并压缩 ') : '转换所选项并压缩 '), icon('arrow'));
+  $('convert').replaceChildren(document.createTextNode(mode === 'merge' ? (isPdf ? '生成 PDF ' : '生成长图 ') : '生成文件 '), icon('arrow'));
   $('merge-title').textContent = isPdf ? '合并为一个 PDF' : '合并为一张长图';
-  $('merge-description').textContent = isPdf ? '所选内容依次排列，每项一页' : '所选内容依次纵向拼接';
+  $('merge-description').textContent = isPdf ? '每项一页' : '按顺序纵向拼接';
   $('limit-label').textContent = isPdf ? (mode === 'merge' ? '整个 PDF 大小上限' : '每个 PDF 大小上限') : (mode === 'merge' ? '整张长图大小上限' : '每张图片大小上限');
   $('format-note').textContent = isPdf ? '优先保留原 PDF 文字；超过上限时转为图片化压缩' : (format === 'png' ? 'PNG 通过调整尺寸控制大小' : 'JPG / JPEG 编码相同，扩展名不同');
-  $('output-summary').textContent = count + ' 个所选项 → ' + (mode === 'merge' ? (isPdf ? '1 个 PDF' : '1 张长图') : count + ' 个文件') + ' · 每个 ≤ ' + bound;
+  $('output-summary').textContent = count ? count + ' 项 → ' + (mode === 'merge' ? (isPdf ? '1 个 PDF' : '1 张长图') : count + ' 个文件') : '请先添加文件';
   $('format-hint').textContent = (mode === 'merge' ? (isPdf ? '整个 PDF' : '整张长图') : '每个输出文件') + '不超过 ' + limitBytes.toLocaleString('zh-CN') + ' 字节。实际文件可能更小；上限越低、内容越多，清晰度可能越低，请放大检查。';
   for (const source of sources) {
     const members = items.filter(item => item.sourceId === source.id), checked = members.filter(item => item.selected).length;
@@ -438,7 +438,7 @@ $('convert').onclick = async () => {
   } finally {
     $('count').textContent = results.length + ' 个文件';
     $('download-all').textContent = results.length === 1 ? '下载文件' : '打包下载 ZIP';
-    $('result-note').textContent = '这是本次处理的结果，编辑页面或修改选择、格式、大小上限后需重新生成。请放大检查文字是否清晰，再提交到网申系统。' + (results.length > 1 ? ' ZIP 需解压后上传其中的文件。' : '');
+    $('result-note').textContent = '下载前请放大检查清晰度。' + (results.length > 1 ? ' ZIP 需解压后上传其中的文件。' : '');
     setBusy(false); $('cancel').disabled = true; observeThumbnails(); message(errors.join('\n'));
   }
 };

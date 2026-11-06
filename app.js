@@ -2,7 +2,7 @@
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
 const $ = id => document.getElementById(id);
 let limitBytes = 200000, resultSignature = '';
-function settingsSignature() {return JSON.stringify([format,mode,limitBytes,selectedItems().map(i=>[i.id,PageEdit.orientation(i),i.edits?.crop,(i.edits?.overlays||[]).map(o=>[o.id,o.x,o.y,o.w,o.h])])]);}
+function settingsSignature() {return JSON.stringify([format,mode,limitBytes,selectedItems().map(i=>[i.id,PageEdit.orientation(i),PageEdit.crop(i),(i.edits?.overlays||[]).map(o=>[o.id,o.x,o.y,o.w,o.h])])]);}
 function icon(name) {
   const paths={up:'M12 19V5m-5 5 5-5 5 5',down:'M12 5v14m-5-5 5 5 5-5',close:'m6 6 12 12M6 18 18 6',download:'M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4',arrow:'M5 12h14m-5-5 5 5-5 5',check:'m5 12 4 4L19 6'};
   const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('fill','none');svg.setAttribute('stroke','currentColor');svg.setAttribute('stroke-width','1.7');svg.setAttribute('stroke-linecap','round');svg.setAttribute('stroke-linejoin','round');svg.setAttribute('aria-hidden','true');const path=document.createElementNS(svg.namespaceURI,'path');path.setAttribute('d',paths[name]);svg.append(path);return svg;
@@ -99,7 +99,7 @@ function makeFileQueue() {
     remove.setAttribute('aria-label', '移除 ' + source.file.name);
     remove.onclick = async () => {
       if (busy) return;
-      items.filter(item => item.sourceId === source.id).forEach(item => {if (item.thumbUrl) URL.revokeObjectURL(item.thumbUrl); for (const overlay of item.edits?.overlays || []) URL.revokeObjectURL(overlay.url);});
+      items.filter(item => item.sourceId === source.id).forEach(item => {if (item.thumbUrl) URL.revokeObjectURL(item.thumbUrl); for (const url of PageEdit.overlayUrls(item)) URL.revokeObjectURL(url);});
       items = items.filter(item => item.sourceId !== source.id); sources = sources.filter(s => s !== source);
       if (source.url) URL.revokeObjectURL(source.url);
       if (source.pdf) await source.pdf.destroy().catch(() => {});
@@ -116,17 +116,6 @@ function moveItem(item, delta) {
   const scrollTop = $('items').scrollTop;
   renderSelection(); $('items').scrollTop = scrollTop;
   document.getElementById(item.id)?.querySelector('[data-move="' + delta + '"]')?.focus();
-}
-function adjustOrientation(item,action) {
-  if (busy) return;
-  const o=PageEdit.orientation(item);
-  if (action==='left'||action==='right') {o.rotation=(o.rotation+(action==='left'?270:90))%360;[o.flipX,o.flipY]=[o.flipY,o.flipX];}
-  else if (action==='horizontal') o.flipX=!o.flipX;
-  else if (action==='vertical') o.flipY=!o.flipY;
-  else {o.rotation=0;o.flipX=o.flipY=false;}
-  item.orientation=o;invalidateThumbnail(item);renderSelection();
-  const card=document.getElementById(item.id),details=card.querySelector('.orientation-control');details.open=true;
-  card.querySelector('[data-orient="'+action+'"]').focus();
 }
 function renderSelection() {
   thumbnailObserver?.disconnect(); makeFileQueue(); $('items').replaceChildren(); $('selection').hidden = !items.length;
@@ -153,22 +142,9 @@ function renderSelection() {
       button.setAttribute('aria-label', (delta === -1 ? '前移 ' : '后移 ') + itemLabel(item)); button.onclick = () => moveItem(item, delta); controls.append(button);
     }
     bottom.append(controls); card.append(top, thumb, title, bottom);
-    if (item.kind === 'pdf') {
-      const editRow=element('div','item-edit-row'),editButton=element('button','item-edit-button','裁剪 / 贴图');
-      editButton.disabled=busy;editButton.setAttribute('aria-label','编辑 '+itemLabel(item));editButton.onclick=()=>{if (!busy) PageEdit.open(item);};
-      editRow.append(editButton,element('span','edited-tag',PageEdit.changed(item)?'已编辑':''));card.append(editRow);
-    }
-    const direction=element('details','orientation-control'),summary=element('summary','','调整方向');
-    const o=PageEdit.orientation(item),modified=o.rotation||o.flipX||o.flipY;
-    if (modified) summary.textContent='方向已调整';
-    const tools=element('div','orientation-tools');
-    for (const [action,text] of [['left','左转 90°'],['right','右转 90°'],['horizontal','水平翻转'],['vertical','垂直翻转'],['reset','恢复方向']]) {
-      const button=element('button','batch-control',text);button.type='button';button.dataset.orient=action;button.disabled=busy;
-      button.setAttribute('aria-label',text+' '+itemLabel(item));
-      if (action==='horizontal'||action==='vertical') button.setAttribute('aria-pressed',String(o[action==='horizontal'?'flipX':'flipY']));
-      button.onclick=()=>adjustOrientation(item,action);tools.append(button);
-    }
-    direction.append(summary,tools);card.append(direction);
+    const editRow=element('div','item-edit-row'),editButton=element('button','item-edit-button','编辑');
+    editButton.disabled=busy;editButton.setAttribute('aria-label','编辑 '+itemLabel(item));editButton.onclick=()=>{if(!busy)PageEdit.open(item);};
+    editRow.append(editButton,element('span','edited-tag',PageEdit.changed(item)?'已编辑':''));card.append(editRow);
     $('items').append(card);
   });
   refreshSelection(); observeThumbnails();
@@ -228,14 +204,13 @@ async function renderItem(item,targetWidth,maxHeight=16000) {return PageEdit.ren
 function invalidateThumbnail(item) {if (item.thumbUrl) URL.revokeObjectURL(item.thumbUrl);item.thumbUrl=null;}
 PageEdit.init({
   onBusy:value=>{setBusy(value);if (!value) observeThumbnails();},renderOriginal:renderOriginalItem,waitThumbnails:()=>thumbnailChain,
-  onCommit:(item,edits,applyAll)=>{
-    const retained=new Set(edits.overlays.map(o=>o.url));
-    for (const overlay of item.edits?.overlays || []) if (!retained.has(overlay.url)) URL.revokeObjectURL(overlay.url);
-    item.edits={crop:{...edits.crop},overlays:edits.overlays.map(o=>({...o}))};invalidateThumbnail(item);
-    if (applyAll) for (const other of items.filter(i=>i.sourceId===item.sourceId&&i!==item)) {
-      other.edits={crop:{...edits.crop},overlays:other.edits?.overlays||[]};invalidateThumbnail(other);
-    }
-    renderSelection();showProgress('页面编辑已保存，请重新生成所需输出。',100);message('');
+  onCommit:(item,edits,applyAll,history)=>{
+    const previous=PageEdit.overlayUrls(item);
+    item.edits={crop:{...edits.crop},overlays:edits.overlays.map(o=>({...o}))};item.orientation={...edits.orientation};item.editHistory=history;
+    const retained=PageEdit.overlayUrls(item);for(const url of previous)if(!retained.has(url))URL.revokeObjectURL(url);
+    invalidateThumbnail(item);
+    if(applyAll&&item.kind==='pdf')for(const other of items.filter(i=>i.sourceId===item.sourceId&&i!==item)){PageEdit.applyCrop(other,edits.crop);invalidateThumbnail(other);}
+    renderSelection();message('');
   }
 });
 async function addFiles(fileList) {

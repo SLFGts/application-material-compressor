@@ -52,6 +52,14 @@ async function exportPdfWithEdits(batch,renderPage,limit,sourceFor,shouldCancel=
           const g=PageEdit.pdfGeometry(viewport,overlay);
           page.drawImage(image,{x:g.imageX,y:g.imageY,width:g.imageWidth,height:g.imageHeight,rotate:PDFLib.degrees(g.angle)});
         }
+        const o=PageEdit.orientation(item),angle=((page.getRotation().angle+o.rotation)%360+360)%360;
+        if (o.flipX||o.flipY) {
+          const box=page.getCropBox(),embeddedPage=await output.embedPage(page,{left:box.x,bottom:box.y,right:box.x+box.width,top:box.y+box.height});
+          const swap=angle%180!==0,flipX=swap?o.flipY:o.flipX,flipY=swap?o.flipX:o.flipY;
+          const wrapper=output.addPage([box.width,box.height]);wrapper.setRotation(PDFLib.degrees(angle));
+          wrapper.drawPage(embeddedPage,{x:flipX?box.width:0,y:flipY?box.height:0,xScale:flipX?-1:1,yScale:flipY?-1:1});
+          output.removePage(output.getPageCount()-2);
+        } else page.setRotation(PDFLib.degrees(angle));
       } else {
         let canvas;
         try {

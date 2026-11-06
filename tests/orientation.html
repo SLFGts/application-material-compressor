@@ -1,0 +1,40 @@
+<!doctype html><meta charset="utf-8"><title>Orientation regression</title><h1>方向回归测试</h1><pre id="report">Running…</pre><div id="examples" style="display:flex;gap:20px;flex-wrap:wrap"></div>
+<script src="../vendor/pdf.min.js"></script><script src="../vendor/pdf-lib.min.js"></script><script src="../compress.js"></script><script src="../page-edit.js?v=orientation1"></script><script src="../pdf-export.js?v=orientation1"></script>
+<script>
+(async()=>{const report=document.getElementById('report'),rows=[];const assert=(v,m)=>{if(!v)throw Error(m)};pdfjsLib.GlobalWorkerOptions.workerSrc='../vendor/pdf.worker.min.js';
+async function canvasPage(doc,num,width){const p=await doc.getPage(num),v=p.getViewport({scale:width/p.getViewport({scale:1}).width}),c=document.createElement('canvas');c.width=Math.round(v.width);c.height=Math.round(v.height);await p.render({canvasContext:c.getContext('2d'),viewport:v,background:'#fff'}).promise;return c;}
+function sample(c){const ctx=c.getContext('2d');return [[.2,.2],[.8,.2],[.2,.8],[.8,.8]].map(([x,y])=>Array.from(ctx.getImageData(Math.floor(x*c.width),Math.floor(y*c.height),1,1).data).slice(0,3));}
+const colors=[[230,30,30],[30,180,30],[30,30,230],[230,180,20]];
+const overlay=document.createElement('canvas');overlay.width=overlay.height=30;overlay.getContext('2d').fillStyle='#ff00ff';overlay.getContext('2d').fillRect(0,0,30,30);const oblob=await new Promise(r=>overlay.toBlob(r));const ourl=URL.createObjectURL(oblob);
+for(const intrinsic of [0,90,180,270]){
+ const src=await PDFLib.PDFDocument.create(),p=src.addPage([240,320]);const rgb=PDFLib.rgb;
+ for(let n=0;n<4;n++)p.drawRectangle({x:(n%2)*120,y:n<2?160:0,width:120,height:160,color:rgb(...colors[n].map(x=>x/255))});
+ p.drawText('ORIENTATION TEXT',{x:10,y:145,size:10});p.setRotation(PDFLib.degrees(intrinsic));p.setCropBox(10,20,220,280);
+ const bytes=await src.save(),file=new File([bytes],'orientation.pdf',{type:'application/pdf'}),pdf=await pdfjsLib.getDocument({data:bytes.slice()}).promise,v=(await pdf.getPage(1)).getViewport({scale:1});
+ const source={file,pdf};
+ for(const edited of [false,true])for(const rotation of [0,90,180,270])for(const flips of [[false,false],[true,false],[false,true],[true,true]]){
+  const item={kind:'pdf',sourceId:'s',page:1,width:v.width,height:v.height,orientation:{rotation,flipX:flips[0],flipY:flips[1]}};
+  if(edited)item.edits={crop:{x:.1,y:.1,w:.8,h:.8},overlays:[{id:'o',blob:oblob,url:ourl,x:.3,y:.3,w:.1,h:.1}]};
+  const render=()=>PageEdit.render(item,(_i,w)=>canvasPage(pdf,1,w),240,1000);
+  const expected=await render();const out=await exportPdfWithEdits([item],render,200000,()=>source);assert(out.pdfMode==='native','Native fallback '+[intrinsic,edited,rotation,flips]);assert(out.blob.size<=200000,'Cap');
+  const result=await pdfjsLib.getDocument({data:new Uint8Array(await out.blob.arrayBuffer())}).promise,actual=await canvasPage(result,1,expected.width);
+  assert(Math.abs(actual.height-expected.height)<=2,'Dimensions');
+  const ax=actual.getContext('2d').getImageData(0,0,actual.width,actual.height).data,ex=expected.getContext('2d').getImageData(0,0,expected.width,expected.height).data;let diff=0;for(let k=0;k<Math.min(ax.length,ex.length);k++)diff+=Math.abs(ax[k]-ex[k]);assert(diff/Math.min(ax.length,ex.length)<8,'Full render mismatch '+[intrinsic,edited,rotation,flips]);const a=sample(actual),e=sample(expected);assert(a.every((c,i)=>c.every((x,j)=>Math.abs(x-e[i][j])<12)),'Pixel mismatch '+JSON.stringify({intrinsic,edited,rotation,flips,a,e}));
+  const text=await (await result.getPage(1)).getTextContent();assert(text.items.some(t=>t.str.trim().length>0),'Text lost '+JSON.stringify({intrinsic,edited,rotation,flips,text:text.items}));
+  rows.push({intrinsic,edited,rotation,flips,bytes:out.blob.size});
+  if(intrinsic===0&&edited&&rotation===90&&flips[0]&&!flips[1]){document.getElementById('examples').append(expected,actual);const link=document.createElement('a');link.textContent='Download test PDF';link.href=URL.createObjectURL(out.blob);link.download='orientation-verified.pdf';document.body.append(link);}
+  await result.destroy();
+ }
+ await pdf.destroy();
+}
+// Independent four-corner oracle for a clockwise quarter-turn followed by horizontal mirror.
+const item={width:200,height:100,orientation:{rotation:90,flipX:true,flipY:false}};
+const c=await PageEdit.render(item,async()=>{const c=document.createElement('canvas');c.width=200;c.height=100;const x=c.getContext('2d');colors.forEach((v,i)=>{x.fillStyle=`rgb(${v})`;x.fillRect(i%2*100,i<2?0:50,100,50)});return c;},100,200);
+assert(JSON.stringify(sample(c))===JSON.stringify([colors[0],colors[2],colors[1],colors[3]]),'Corner oracle');
+const noise=document.createElement('canvas');noise.width=800;noise.height=600;const nx=noise.getContext('2d'),nd=nx.createImageData(800,600);let seed=17;for(let k=0;k<nd.data.length;k+=4){seed=(seed*1664525+1013904223)>>>0;nd.data[k]=seed&255;nd.data[k+1]=(seed>>>8)&255;nd.data[k+2]=(seed>>>16)&255;nd.data[k+3]=255;}nx.putImageData(nd,0,0);
+const photo={kind:'png',width:800,height:600,orientation:{rotation:90,flipX:false,flipY:true}},renderPhoto=()=>PageEdit.render(photo,async()=>{const c=document.createElement('canvas');c.width=800;c.height=600;c.getContext('2d').drawImage(noise,0,0);return c;},600,1000);
+const photoOut=await exportPdfWithEdits([photo],renderPhoto,50000,()=>null);assert(photoOut.pdfMode==='raster'&&photoOut.blob.size<=50000,'Raster cap');
+for(const format of ['png','jpg','jpeg']){const c=await renderPhoto(),encoded=await compressCanvas(c,format,200000);assert(encoded.blob.size<=200000,'Image cap '+format);assert(encoded.height>encoded.width,'Image orientation '+format);}
+report.textContent=JSON.stringify({status:'PASS',rasterBytes:photoOut.blob.size,imageFormats:['png','jpg','jpeg'],pdfCases:rows.length,cornerOracle:true,maxBytes:Math.max(...rows.map(r=>r.bytes))},null,2);document.title='PASS orientation';
+})().catch(e=>{document.getElementById('report').textContent=e.stack;document.title='FAIL orientation';});
+</script>

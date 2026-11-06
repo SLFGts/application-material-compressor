@@ -8,12 +8,21 @@ window.PageEdit = (() => {
     const x=clamp(Number(value.x)||0,0,.97),y=clamp(Number(value.y)||0,0,.97);
     return {x,y,w:clamp(Number(value.w)||.03,.03,1-x),h:clamp(Number(value.h)||.03,.03,1-y)};
   }
-  function dimensions(item) {const c=crop(item);return {width:item.width*c.w,height:item.height*c.h};}
+  function orientation(item) {return {rotation:0,flipX:false,flipY:false,...item.orientation};}
+  function dimensions(item) {const c=crop(item),o=orientation(item),swap=o.rotation%180!==0;return {width:(swap?item.height*c.h:item.width*c.w),height:(swap?item.width*c.w:item.height*c.h)};}
+  function orientCanvas(base,item) {
+    const o=orientation(item);if (!o.rotation&&!o.flipX&&!o.flipY) return base;
+    const canvas=document.createElement('canvas'),swap=o.rotation%180!==0;
+    canvas.width=swap?base.height:base.width;canvas.height=swap?base.width:base.height;
+    try {const ctx=canvas.getContext('2d');ctx.translate(canvas.width/2,canvas.height/2);ctx.scale(o.flipX?-1:1,o.flipY?-1:1);ctx.rotate(o.rotation*Math.PI/180);ctx.drawImage(base,-base.width/2,-base.height/2);return canvas;}
+    catch(error){canvas.width=canvas.height=1;throw error;}
+    finally {base.width=base.height=1;}
+  }
   function changed(item) {const c=crop(item);return c.x>.00001||c.y>.00001||c.w<.99999||c.h<.99999||!!item.edits?.overlays?.length;}
   function image(url) {return new Promise((resolve,reject)=>{const im=new Image();im.onload=()=>resolve(im);im.onerror=()=>reject(new Error('图片无法读取'));im.src=url;});}
   async function render(item, original, width, maxHeight) {
-    const c=crop(item),base=await original(item,width/c.w,maxHeight/c.h);
-    if (!changed(item)) return base;
+    const c=crop(item),d=dimensions(item),scale=Math.min(width/d.width,maxHeight/d.height),base=await original(item,item.width*scale,item.height*scale);
+    if (!changed(item)) return orientCanvas(base,item);
     const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(base.width*c.w));canvas.height=Math.max(1,Math.round(base.height*c.h));
     try {
       const ctx=canvas.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);
@@ -22,7 +31,7 @@ window.PageEdit = (() => {
         const im=await image(overlay.url);
         ctx.drawImage(im,(overlay.x-c.x)*base.width,(overlay.y-c.y)*base.height,overlay.w*base.width,overlay.h*base.height);
       }
-      return canvas;
+      return orientCanvas(canvas,item);
     } catch(error) {canvas.width=canvas.height=1;throw error;}
     finally {base.width=base.height=1;}
   }
@@ -177,5 +186,5 @@ window.PageEdit = (() => {
     $('editor-stage').onpointerup=()=>{gesture=null;};$('editor-stage').onpointercancel=()=>{gesture=null;};
     $('editor-stage').onkeydown=event=>{if ((event.key==='Delete'||event.key==='Backspace')&&selected()) {event.preventDefault();removeSelected();}};
   }
-  return {crop,normalizeCrop,dimensions,changed,render,pdfGeometry,init,open};
+  return {crop,normalizeCrop,dimensions,orientation,changed,render,pdfGeometry,init,open};
 })();

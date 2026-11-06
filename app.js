@@ -2,7 +2,7 @@
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
 const $ = id => document.getElementById(id);
 let limitBytes = 200000, resultSignature = '';
-function settingsSignature() {return JSON.stringify([format,mode,limitBytes,selectedItems().map(i=>[i.id,i.edits?.crop,(i.edits?.overlays||[]).map(o=>[o.id,o.x,o.y,o.w,o.h])])]);}
+function settingsSignature() {return JSON.stringify([format,mode,limitBytes,selectedItems().map(i=>[i.id,PageEdit.orientation(i),i.edits?.crop,(i.edits?.overlays||[]).map(o=>[o.id,o.x,o.y,o.w,o.h])])]);}
 function icon(name) {
   const paths={up:'M12 19V5m-5 5 5-5 5 5',down:'M12 5v14m-5-5 5 5 5-5',close:'m6 6 12 12M6 18 18 6',download:'M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4',arrow:'M5 12h14m-5-5 5 5-5 5',check:'m5 12 4 4L19 6'};
   const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('fill','none');svg.setAttribute('stroke','currentColor');svg.setAttribute('stroke-width','1.7');svg.setAttribute('stroke-linecap','round');svg.setAttribute('stroke-linejoin','round');svg.setAttribute('aria-hidden','true');const path=document.createElementNS(svg.namespaceURI,'path');path.setAttribute('d',paths[name]);svg.append(path);return svg;
@@ -44,7 +44,7 @@ function refreshSelection() {
   $('item-total').textContent=items.length+' 项';
   $('drop-title').textContent=items.length ? '添加文件' : '拖入文件，或点击添加';
   if (results.length) {const stale=resultSignature!==settingsSignature();$('result-note').classList.toggle('stale',stale);$('result-note').textContent=stale ? '材料或设置已更改，请重新生成。' : '下载前请放大检查清晰度。'+(results.length>1?' ZIP 需解压后使用其中的文件。':'');}
-  const isPdf = format === 'pdf', bound = size(limitBytes);
+  const isPdf = format === 'pdf';
   $('convert').disabled = busy || count === 0 || !$('size-value').checkValidity();
   $('convert').replaceChildren(document.createTextNode(mode === 'merge' ? (isPdf ? '生成 PDF ' : '生成长图 ') : '生成文件 '), icon('arrow'));
   $('merge-title').textContent = isPdf ? '合并为一个 PDF' : '合并为一张长图';
@@ -117,6 +117,17 @@ function moveItem(item, delta) {
   renderSelection(); $('items').scrollTop = scrollTop;
   document.getElementById(item.id)?.querySelector('[data-move="' + delta + '"]')?.focus();
 }
+function adjustOrientation(item,action) {
+  if (busy) return;
+  const o=PageEdit.orientation(item);
+  if (action==='left'||action==='right') {o.rotation=(o.rotation+(action==='left'?270:90))%360;[o.flipX,o.flipY]=[o.flipY,o.flipX];}
+  else if (action==='horizontal') o.flipX=!o.flipX;
+  else if (action==='vertical') o.flipY=!o.flipY;
+  else {o.rotation=0;o.flipX=o.flipY=false;}
+  item.orientation=o;invalidateThumbnail(item);renderSelection();
+  const card=document.getElementById(item.id),details=card.querySelector('.orientation-control');details.open=true;
+  card.querySelector('[data-orient="'+action+'"]').focus();
+}
 function renderSelection() {
   thumbnailObserver?.disconnect(); makeFileQueue(); $('items').replaceChildren(); $('selection').hidden = !items.length;
   items.forEach((item, index) => {
@@ -134,7 +145,7 @@ function renderSelection() {
     thumb.onclick = () => previewItem(item);
     const title = element('p', 'item-label', item.fileName); title.title = item.fileName;
     const bottom = element('div', 'item-bottom'), controls = element('div');
-    bottom.append(element('small', '', item.page ? '第 ' + item.page + ' 页' : item.width + ' × ' + item.height));
+    bottom.append(element('small', '', item.page ? '第 ' + item.page + ' 页' : Math.round(PageEdit.dimensions(item).width) + ' × ' + Math.round(PageEdit.dimensions(item).height)));
     for (const delta of [-1, 1]) {
       const button = element('button');button.append(icon(delta===-1?'up':'down')); button.dataset.move = delta;
       button.dataset.boundary = String(delta === -1 ? index === 0 : index === items.length - 1);
@@ -147,6 +158,17 @@ function renderSelection() {
       editButton.disabled=busy;editButton.setAttribute('aria-label','编辑 '+itemLabel(item));editButton.onclick=()=>{if (!busy) PageEdit.open(item);};
       editRow.append(editButton,element('span','edited-tag',PageEdit.changed(item)?'已编辑':''));card.append(editRow);
     }
+    const direction=element('details','orientation-control'),summary=element('summary','','调整方向');
+    const o=PageEdit.orientation(item),modified=o.rotation||o.flipX||o.flipY;
+    if (modified) summary.textContent='方向已调整';
+    const tools=element('div','orientation-tools');
+    for (const [action,text] of [['left','左转 90°'],['right','右转 90°'],['horizontal','水平翻转'],['vertical','垂直翻转'],['reset','恢复方向']]) {
+      const button=element('button','batch-control',text);button.type='button';button.dataset.orient=action;button.disabled=busy;
+      button.setAttribute('aria-label',text+' '+itemLabel(item));
+      if (action==='horizontal'||action==='vertical') button.setAttribute('aria-pressed',String(o[action==='horizontal'?'flipX':'flipY']));
+      button.onclick=()=>adjustOrientation(item,action);tools.append(button);
+    }
+    direction.append(summary,tools);card.append(direction);
     $('items').append(card);
   });
   refreshSelection(); observeThumbnails();

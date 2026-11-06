@@ -60,23 +60,83 @@ window.PageEdit = (() => {
   let options,session=null,nextOverlay=0,gesture=null;
   const selected=()=>session?.draft.overlays.find(o=>o.id===session.selectedId);
   const field=(id,n)=>{if (document.activeElement!==$(id)) $(id).value=Math.round(n*1000)/10;};
-  function checkpoint() {if (session&&!session.working) appendHistory(session.history,session.draft);}
+  function checkpoint(){if(session&&!session.working){const before=key(session.history.states[session.history.index]);appendHistory(session.history,session.draft);if(session.entries.length>1&&before!==key(session.draft))renderPages();}}
+  function stashCurrent(){if(!session)return;const entry=session.entries[session.activeIndex];entry.draft=session.draft;entry.history=session.history;}
+  function updatePageNavigation(){
+    if(!session)return;const multi=session.entries.length>1;
+    $('editor-pages').hidden=!multi;$('page-editor').classList.toggle('has-pages',multi);
+    $('editor-pages-count').textContent=session.entries.filter(e=>e.selected).length+'/'+session.entries.length+' 页';$('editor-pages-count').title='已选页数 / 总页数';
+    $('editor-page-up').disabled=session.working||session.activeIndex===0;
+    $('editor-page-down').disabled=session.working||session.activeIndex===session.entries.length-1;
+    $('editor-apply-crop-all').disabled=session.working||!multi;
+    $('editor-apply-all-row').hidden=!multi;
+  }
+  function renderPages(){
+    if(!session)return;const current=session;stashCurrent();current.pageObserver?.disconnect();const list=$('editor-page-list'),scrollTop=list.scrollTop,scrollLeft=list.scrollLeft;list.replaceChildren();
+    current.entries.forEach((entry,index)=>{
+      const tile=document.createElement('div');tile.className='editor-page-tile'+(index===current.activeIndex?' active':'')+(!entry.selected?' excluded':'');
+      const check=document.createElement('input');check.type='checkbox';check.checked=entry.selected;check.disabled=current.working;check.setAttribute('aria-label','导出第 '+entry.item.page+' 页');check.onchange=()=>{entry.selected=check.checked;tile.classList.toggle('excluded',!entry.selected);updateHistoryControls();updatePageNavigation();};
+      const choose=document.createElement('button');choose.type='button';choose.className='editor-page-pick';choose.dataset.entryId=entry.item.id;choose.setAttribute('aria-label','编辑第 '+entry.item.page+' 页');choose.setAttribute('aria-current',String(index===current.activeIndex));choose.disabled=current.working;
+      const stamp=key(entry.draft),cached=current.navUrls.get(entry.item.id);
+      if(cached&&cached.key===stamp){const im=new Image();im.src=cached.url;im.alt='第 '+entry.item.page+' 页';choose.append(im);}else choose.append(UIIcons.svg('file'));
+      choose.append(Object.assign(document.createElement('span'),{textContent:'第 '+entry.item.page+' 页'}));choose.onclick=()=>switchPage(index);
+      tile.append(check,choose);$('editor-page-list').append(tile);
+    });updatePageNavigation();list.scrollTop=scrollTop;list.scrollLeft=scrollLeft;
+    const active=list.querySelector('[aria-current="true"]');if(active&&current.entries.length>1){const a=active.getBoundingClientRect(),r=list.getBoundingClientRect();if(a.top<r.top)list.scrollTop-=r.top-a.top;else if(a.bottom>r.bottom)list.scrollTop+=a.bottom-r.bottom;if(a.left<r.left)list.scrollLeft-=r.left-a.left;else if(a.right>r.right)list.scrollLeft+=a.right-r.right;}
+    if(current.entries.length<2)return;
+    current.pageObserver=new IntersectionObserver(entries=>{
+      for(const target of entries){if(!target.isIntersecting)continue;current.pageObserver.unobserve(target.target);const entry=current.entries.find(e=>e.item.id===target.target.dataset.entryId);if(!entry)continue;
+        const stamp=key(entry.draft),cached=current.navUrls.get(entry.item.id);if(cached?.key===stamp)continue;
+        current.navChain=current.navChain.then(async()=>{if(session!==current||key(entry.draft)!==stamp)return;let canvas;try{
+          const virtual={...entry.item,edits:entry.draft,orientation:entry.draft.orientation};canvas=await render(virtual,options.renderOriginal,100,130);const blob=await new Promise(r=>canvas.toBlob(r,'image/jpeg',.65));
+          if(!blob||session!==current||key(entry.draft)!==stamp)return;
+          const old=current.navUrls.get(entry.item.id);if(old)URL.revokeObjectURL(old.url);const url=URL.createObjectURL(blob);current.navUrls.set(entry.item.id,{key:stamp,url});
+          const node=$('editor-page-list').querySelector('[data-entry-id="'+entry.item.id+'"]');if(node){node.querySelectorAll('svg,img').forEach(n=>n.remove());const im=new Image();im.src=url;im.alt='第 '+entry.item.page+' 页';node.prepend(im);}
+        }catch{}finally{if(canvas)canvas.width=canvas.height=1;}});
+      }
+    },{root:$('editor-page-list'),rootMargin:'120px'});
+    $('editor-page-list').querySelectorAll('.editor-page-pick').forEach(n=>current.pageObserver.observe(n));
+  }
+  async function loadActivePage(){
+    if(!session)return;const current=session,serial=++current.generation;setWorking(true);$('editor-base').removeAttribute('src');$('editor-message').textContent='正在加载…';$('editor-overlays').replaceChildren();
+    $('editor-page-name').textContent=current.item.fileName+(current.item.page?' · 第 '+current.item.page+' 页':'');$('editor-pdf-note').hidden=current.item.kind!=='pdf';fitStage();renderPages();let canvas;
+    try{
+      await options.waitThumbnails();if(session!==current||serial!==current.generation)return;
+      canvas=await options.renderOriginal(current.item,Math.min(1600,current.item.width*2.5),2400);const blob=await new Promise(r=>canvas.toBlob(r,'image/png'));
+      if(session!==current||serial!==current.generation)return;if(!blob)throw new Error('无法加载预览');if(current.backgroundUrl)URL.revokeObjectURL(current.backgroundUrl);
+      current.backgroundUrl=URL.createObjectURL(blob);$('editor-base').src=current.backgroundUrl;$('editor-message').textContent='';setWorking(false);paint();renderPages();
+    }catch(error){if(session===current&&serial===current.generation){$('editor-message').textContent=error.message;setWorking(false);$('editor-save').disabled=true;}}
+    finally{if(canvas)canvas.width=canvas.height=1;}
+  }
+  async function switchPage(index){
+    if(!session||session.working||index===session.activeIndex)return;checkpoint();stashCurrent();const entry=session.entries[index];session.activeIndex=index;session.item=entry.item;session.draft=entry.draft;session.history=entry.history;session.savedKey=entry.savedKey;session.selectedId=null;gesture=null;await loadActivePage();
+  }
+  function movePage(delta){
+    if(!session||session.working)return;checkpoint();stashCurrent();const from=session.activeIndex,to=from+delta;if(to<0||to>=session.entries.length)return;
+    [session.entries[from],session.entries[to]]=[session.entries[to],session.entries[from]];session.activeIndex=to;renderPages();updateHistoryControls();
+    $('editor-page-list').querySelector('[aria-current="true"]')?.focus();
+  }
+  function copyCropToPages(){
+    if(!session||session.working)return;checkpoint();stashCurrent();for(const entry of session.entries){if(entry.item===session.item)continue;entry.draft.crop={...session.draft.crop};appendHistory(entry.history,entry.draft);}
+    renderPages();updateHistoryControls();
+  }
   function updateHistoryControls() {
-    if (!session) return;const h=session.history;
+    if (!session) return;stashCurrent();const h=session.history;
     $('editor-undo').disabled=session.working||h.index===0;
     $('editor-redo').disabled=session.working||h.index===h.states.length-1;
     $('editor-reset-page').disabled=session.working||key(session.draft)===key(originalState());
-    $('editor-change-status').textContent=key(session.draft)===session.savedKey?'未修改':'有未保存的修改';
+    const dirty=session.entries.some(e=>key(e.draft)!==e.savedKey||e.selected!==e.savedSelected)||session.entries.map(e=>e.item.id).join()!==session.initialOrder;
+    $('editor-change-status').textContent=dirty?'有未保存的修改':'未修改';
   }
   function setWorking(value) {
     if (!session) return;session.working=value;
     $('page-editor').querySelectorAll('button,input').forEach(el=>{if(el.id!=='editor-close')el.disabled=value;});
-    $('editor-stage').classList.toggle('working',value);updateHistoryControls();
+    $('editor-stage').classList.toggle('working',value);updateHistoryControls();updatePageNavigation();
   }
   function mutate(action) {if(!session||session.working)return;checkpoint();action();checkpoint();paint();}
   function travel(delta) {
     if(!session||session.working)return;if(document.activeElement?.matches('#page-editor input'))document.activeElement.blur();checkpoint();const h=session.history,next=h.index+delta;
-    if(next<0||next>=h.states.length)return;h.index=next;session.draft=cloneState(h.states[next]);session.selectedId=null;paint();
+    if(next<0||next>=h.states.length)return;h.index=next;session.draft=cloneState(h.states[next]);session.selectedId=null;paint();renderPages();
   }
   function rotate(action) {mutate(()=>{const o=session.draft.orientation;
     if(action==='left'||action==='right'){o.rotation=(o.rotation+(action==='left'?270:90))%360;[o.flipX,o.flipY]=[o.flipY,o.flipX];}
@@ -121,28 +181,19 @@ window.PageEdit = (() => {
     $('editor-direction-status').textContent='旋转 '+o.rotation+'°'+(o.flipX?' · 水平翻转':'')+(o.flipY?' · 垂直翻转':'');
     updateHistoryControls();
   }
-  function close(save=false) {
-    if(!session)return;const old=session;session=null;gesture=null;
-    const retained=new Set(save?old.history.states.flatMap(s=>s.overlays.map(o=>o.url)):[]);
+  function close(save=false){
+    if(!session)return;stashCurrent();const old=session;session=null;gesture=null;old.pageObserver?.disconnect();
+    const retained=new Set(save?old.entries.flatMap(e=>e.history.states.flatMap(s=>s.overlays.map(o=>o.url))):[]);
     for(const url of old.createdUrls)if(!retained.has(url))URL.revokeObjectURL(url);
-    if(old.backgroundUrl)URL.revokeObjectURL(old.backgroundUrl);
-    $('editor-base').removeAttribute('src');$('editor-overlays').replaceChildren();if($('page-editor').open)$('page-editor').close();options.onBusy(false);
-    document.getElementById(old.item.id)?.querySelector('.item-edit-button')?.focus();
+    if(old.backgroundUrl)URL.revokeObjectURL(old.backgroundUrl);for(const cached of old.navUrls.values())URL.revokeObjectURL(cached.url);
+    $('editor-base').removeAttribute('src');$('editor-overlays').replaceChildren();$('editor-page-list').replaceChildren();if($('page-editor').open)$('page-editor').close();options.onBusy(false);
+    document.getElementById(old.item.sourceId||old.item.id)?.querySelector('.item-edit-button')?.focus();
   }
-  async function open(item) {
-    if(session)return;options.onBusy(true);const history=historyFor(item),draft=snapshot(item);
-    const current={item,draft,history,savedKey:key(draft),mode:'crop',selectedId:null,working:true,createdUrls:new Set(),backgroundUrl:null};session=current;
-    $('editor-page-name').textContent=item.fileName+(item.page?' · 第 '+item.page+' 页':'');$('editor-message').textContent='正在加载…';$('editor-apply-all').checked=false;
-    $('editor-apply-all-row').hidden=item.kind!=='pdf';$('editor-pdf-note').hidden=item.kind!=='pdf';
-    $('editor-base').alt='待编辑材料';$('editor-base').removeAttribute('src');$('editor-overlays').replaceChildren();
-    $('page-editor').showModal();setWorking(true);setMode('crop');let canvas;
-    try {
-      await options.waitThumbnails();if(session!==current)return;
-      canvas=await options.renderOriginal(item,Math.min(1600,item.width*2.5),2400);
-      const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));if(session!==current)return;if(!blob)throw new Error('无法加载预览');
-      current.backgroundUrl=URL.createObjectURL(blob);$('editor-base').src=current.backgroundUrl;$('editor-message').textContent='';setWorking(false);paint();
-    }catch(error){if(session===current){$('editor-message').textContent=error.message;$('editor-save').disabled=true;}}
-    finally{if(canvas)canvas.width=canvas.height=1;}
+  async function open(item,fileItems){
+    if(session)return;options.onBusy(true);const members=fileItems||[item],entries=members.map(item=>{const draft=snapshot(item);return {item,draft,history:historyFor(item),savedKey:key(draft),selected:item.selected!==false,savedSelected:item.selected!==false};});
+    const index=Math.max(0,entries.findIndex(e=>e.item===item)),entry=entries[index];
+    session={item:entry.item,draft:entry.draft,history:entry.history,savedKey:entry.savedKey,entries,activeIndex:index,initialOrder:entries.map(e=>e.item.id).join(),fileMode:!!fileItems,mode:'crop',selectedId:null,working:true,createdUrls:new Set(),backgroundUrl:null,navUrls:new Map(),navChain:Promise.resolve(),generation:0};
+    $('editor-base').alt='待编辑材料';$('page-editor').showModal();setWorking(true);setMode('crop');await loadActivePage();
   }
   async function addImages(files) {
     if(!session||session.working)return;checkpoint();const current=session;setWorking(true);const errors=[];
@@ -187,13 +238,20 @@ window.PageEdit = (() => {
     for(const name of ['crop','image','direction']){$('editor-'+name+'-mode').onclick=()=>setMode(name);$('editor-'+name+'-mode').onkeydown=e=>{const names=['crop','image','direction'];if(['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();const index=names.indexOf(name),next=e.key==='Home'?0:e.key==='End'?2:(index+(e.key==='ArrowRight'?1:2))%3;setMode(names[next]);$('editor-'+names[next]+'-mode').focus();}};}
     $('editor-undo').onclick=()=>travel(-1);$('editor-redo').onclick=()=>travel(1);
     $('editor-reset-crop').onclick=()=>mutate(()=>{session.draft.crop=fullCrop();});
-    $('editor-reset-page').onclick=()=>mutate(()=>{session.draft=originalState();session.selectedId=null;$('editor-apply-all').checked=false;});
+    $('editor-reset-page').onclick=()=>mutate(()=>{session.draft=originalState();session.selectedId=null;});
     for(const [id,action] of [['editor-rotate-left','left'],['editor-rotate-right','right'],['editor-flip-horizontal','horizontal'],['editor-flip-vertical','vertical'],['editor-reset-direction','reset']])$(id).onclick=()=>rotate(action);
     $('editor-add-image').onclick=()=>$('editor-image-file').click();$('editor-image-file').onchange=e=>{const files=Array.from(e.target.files);e.target.value='';addImages(files);};$('editor-delete-image').onclick=removeSelected;
     for(const k of ['x','y','w','h'])$('crop-'+k).oninput=()=>{if(!session||session.working)return;const values=Object.fromEntries(['x','y','w','h'].map(k=>[k,$('crop-'+k).valueAsNumber/100]));if(Object.values(values).every(Number.isFinite)){session.draft.crop=normalizeCrop(values);paint();}};
     for(const k of ['x','y','w'])$('image-'+k).oninput=()=>{const im=selected();if(!im||session.working)return;const value=$('image-'+k).valueAsNumber/100;if(!Number.isFinite(value))return;if(k==='w'){const ratio=im.h/im.w,max=Math.min(1-im.x,(1-im.y)/ratio);im.w=clamp(value,Math.min(.01,max),max);im.h=im.w*ratio;}else im[k]=clamp(value,0,1-im[k==='x'?'w':'h']);paint();};
     for(const id of ['crop-x','crop-y','crop-w','crop-h','image-x','image-y','image-w']){$(id).onchange=()=>{checkpoint();updateHistoryControls();};$(id).onblur=()=>{checkpoint();paint();};}
-    $('editor-save').onclick=()=>{if(!session||session.working)return;session.draft.crop=normalizeCrop(session.draft.crop);checkpoint();options.onCommit(session.item,cloneState(session.draft),$('editor-apply-all').checked,session.history);close(true);};
+    $('editor-save').onclick=()=>{if(!session||session.working)return;session.draft.crop=normalizeCrop(session.draft.crop);checkpoint();stashCurrent();
+      if(session.fileMode&&options.onFileCommit)options.onFileCommit(session.entries.map(e=>({...e,draft:cloneState(e.draft)})));
+      else options.onCommit(session.item,cloneState(session.draft),false,session.history);close(true);
+    };
+    $('editor-page-up').onclick=()=>movePage(-1);$('editor-page-down').onclick=()=>movePage(1);$('editor-apply-crop-all').onclick=copyCropToPages;
+    for(const [id,name,label]of [['editor-undo','undo','撤销当前页编辑（⌘/Ctrl+Z）'],['editor-redo','redo','重做当前页编辑（⌘/Ctrl+Shift+Z）'],['editor-reset-page','reset','恢复当前页原始状态'],['editor-rotate-left','rotateLeft','左转 90°'],['editor-rotate-right','rotateRight','右转 90°'],['editor-flip-horizontal','flipH','水平翻转'],['editor-flip-vertical','flipV','垂直翻转'],['editor-reset-direction','reset','恢复方向'],['editor-reset-crop','reset','恢复整图'],['editor-add-image','plus','添加贴图'],['editor-delete-image','trash','删除所选贴图'],['editor-page-up','up','当前页前移'],['editor-page-down','down','当前页后移'],['editor-apply-crop-all','stack','将裁剪应用到全部页面（各页可撤销）']])UIIcons.set($(id),name,label);
+    for(const [name,glyph,label]of [['crop','crop','裁剪'],['image','image','贴图'],['direction','direction','方向']]){const el=$('editor-'+name+'-mode');el.replaceChildren(UIIcons.svg(glyph));el.append(Object.assign(document.createElement('span'),{textContent:label}));}
+
     $('editor-stage').onpointerdown=pointerDown;$('editor-stage').onpointermove=pointerMove;
     $('editor-stage').onpointerup=()=>{gesture=null;checkpoint();updateHistoryControls();};$('editor-stage').onpointercancel=()=>{gesture=null;checkpoint();updateHistoryControls();};
     $('page-editor').onkeydown=e=>{

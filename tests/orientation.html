@@ -1,5 +1,5 @@
 <!doctype html><meta charset="utf-8"><title>Orientation regression</title><h1>方向回归测试</h1><pre id="report">Running…</pre><div id="examples" style="display:flex;gap:20px;flex-wrap:wrap"></div>
-<script src="../vendor/pdf.min.js"></script><script src="../vendor/pdf-lib.min.js"></script><script src="../compress.js"></script><script src="../page-edit.js?v=editor2"></script><script src="../pdf-export.js?v=orientation1"></script>
+<script src="../vendor/pdf.min.js"></script><script src="../vendor/pdf-lib.min.js"></script><script src="../compress.js"></script><script src="../page-edit.js?v=files4"></script><script src="../pdf-export.js?v=orientation1"></script>
 <script>
 (async()=>{const report=document.getElementById('report'),rows=[];const assert=(v,m)=>{if(!v)throw Error(m)};pdfjsLib.GlobalWorkerOptions.workerSrc='../vendor/pdf.worker.min.js';
 async function canvasPage(doc,num,width){const p=await doc.getPage(num),v=p.getViewport({scale:width/p.getViewport({scale:1}).width}),c=document.createElement('canvas');c.width=Math.round(v.width);c.height=Math.round(v.height);await p.render({canvasContext:c.getContext('2d'),viewport:v,background:'#fff'}).promise;return c;}

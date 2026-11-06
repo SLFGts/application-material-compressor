@@ -3,10 +3,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
 const $ = id => document.getElementById(id);
 let limitBytes = 200000, resultSignature = '';
 function settingsSignature() {return JSON.stringify([format,mode,limitBytes,selectedItems().map(i=>[i.id,PageEdit.orientation(i),PageEdit.crop(i),(i.edits?.overlays||[]).map(o=>[o.id,o.x,o.y,o.w,o.h])])]);}
-function icon(name) {
-  const paths={up:'M12 19V5m-5 5 5-5 5 5',down:'M12 5v14m-5-5 5 5 5-5',close:'m6 6 12 12M6 18 18 6',download:'M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4',arrow:'M5 12h14m-5-5 5 5-5 5',check:'m5 12 4 4L19 6'};
-  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('fill','none');svg.setAttribute('stroke','currentColor');svg.setAttribute('stroke-width','1.7');svg.setAttribute('stroke-linecap','round');svg.setAttribute('stroke-linejoin','round');svg.setAttribute('aria-hidden','true');const path=document.createElementNS(svg.namespaceURI,'path');path.setAttribute('d',paths[name]);svg.append(path);return svg;
-}
+function icon(name) {return UIIcons.svg(name);}
 let sources = [], items = [], results = [], format = 'jpg', mode = 'merge';
 let busy = false, cancelled = false, idCounter = 0, thumbnailChain = Promise.resolve();
 let previewUrl = null, thumbnailObserver;
@@ -41,7 +38,7 @@ function refreshSelection() {
   $('selection-count').classList.toggle('empty-selection', items.length > 0 && count === 0);
   document.body.classList.toggle('has-materials',items.length>0);
   $('material-total').textContent=sources.length ? sources.length+' 份文件' : '';
-  $('item-total').textContent=items.length+' 项';
+  $('item-total').textContent=sources.length+' 份文件';
   $('drop-title').textContent=items.length ? '添加文件' : '拖入文件，或点击添加';
   if (results.length) {const stale=resultSignature!==settingsSignature();$('result-note').classList.toggle('stale',stale);$('result-note').textContent=stale ? '材料或设置已更改，请重新生成。' : '下载前请放大检查清晰度。'+(results.length>1?' ZIP 需解压后使用其中的文件。':'');}
   const isPdf = format === 'pdf';
@@ -53,17 +50,12 @@ function refreshSelection() {
   $('format-note').textContent = isPdf ? '优先保留原 PDF 文字；超过上限时转为图片化压缩' : (format === 'png' ? 'PNG 通过调整尺寸控制大小' : 'JPG / JPEG 编码相同，扩展名不同');
   $('output-summary').textContent = count ? count + ' 项 → ' + (mode === 'merge' ? (isPdf ? '1 个 PDF' : '1 张长图') : count + ' 个文件') : '请先添加文件';
   $('format-hint').textContent = (mode === 'merge' ? (isPdf ? '整个 PDF' : '整张长图') : '每个输出文件') + '不超过 ' + limitBytes.toLocaleString('zh-CN') + ' 字节。实际文件可能更小；上限越低、内容越多，清晰度可能越低，请放大检查。';
-  for (const source of sources) {
-    const members = items.filter(item => item.sourceId === source.id), checked = members.filter(item => item.selected).length;
-    const input = document.querySelector('[data-file-check="' + source.id + '"]');
-    if (input) {input.checked = checked === members.length; input.indeterminate = checked > 0 && checked < members.length;}
-    const info = document.querySelector('[data-file-count="' + source.id + '"]');
-    if (info) info.textContent = '已选 ' + checked + '/' + members.length + ' · ' + size(source.file.size);
-  }
-  for (const item of items) {
-    const card = document.getElementById(item.id), input = card?.querySelector('input');
-    if (card) {card.classList.toggle('chosen', item.selected); card.classList.toggle('excluded', !item.selected);}
-    if (input) input.checked = item.selected;
+  for(const source of sources){
+    const members=sourceMembers(source),checked=members.filter(i=>i.selected).length,input=document.querySelector('[data-file-check="'+source.id+'"]');
+    if(input){input.checked=checked===members.length;input.indeterminate=checked>0&&checked<members.length;}
+    const card=document.getElementById(source.id);if(card){card.classList.toggle('chosen',checked>0);card.classList.toggle('excluded',checked===0);}
+    const info=document.querySelector('[data-file-count="'+source.id+'"]');
+    if(info)info.textContent=source.kind==='pdf'?('PDF · '+members.length+' 页 · 已选 '+checked+' 页'):source.kind.toUpperCase()+' · '+size(source.file.size);
   }
 }
 function setLimit(kb, updateInput = true) {
@@ -85,69 +77,39 @@ function showProgress(text, value = 0) {
   $('progress-area').hidden = false; $('progress-text').textContent = text; $('progress').value = value;
 }
 function resetCancellation() {cancelled = false; $('cancel').disabled = false;}
-function makeFileQueue() {
-  $('queue').replaceChildren();
-  for (const source of sources) {
-    const row = element('div', 'file-row'), label = element('label', 'source-select'), check = document.createElement('input');
-    check.type = 'checkbox'; check.dataset.fileCheck = source.id; check.disabled = busy;
-    check.setAttribute('aria-label', '选择文件 ' + source.file.name);
-    check.onchange = () => {items.filter(item => item.sourceId === source.id).forEach(item => item.selected = check.checked); refreshSelection();};
-    const name = element('span', 'name', source.file.name); name.title = source.file.name;
-    label.append(check, name);
-    const info = element('small'); info.dataset.fileCount = source.id;
-    const remove = element('button', 'text-button'); remove.append(icon('close')); remove.dataset.remove = source.id; remove.disabled = busy;
-    remove.setAttribute('aria-label', '移除 ' + source.file.name);
-    remove.onclick = async () => {
-      if (busy) return;
-      items.filter(item => item.sourceId === source.id).forEach(item => {if (item.thumbUrl) URL.revokeObjectURL(item.thumbUrl); for (const url of PageEdit.overlayUrls(item)) URL.revokeObjectURL(url);});
-      items = items.filter(item => item.sourceId !== source.id); sources = sources.filter(s => s !== source);
-      if (source.url) URL.revokeObjectURL(source.url);
-      if (source.pdf) await source.pdf.destroy().catch(() => {});
-      renderSelection();
-    };
-    row.append(label, info, remove); $('queue').append(row);
-  }
+function sourceMembers(source){return items.filter(i=>i.sourceId===source.id);}
+function openSource(source){const members=sourceMembers(source);if(!busy&&members.length)PageEdit.open(members.find(i=>i.selected)||members[0],members);}
+async function removeSource(source){
+  if(busy)return;const members=sourceMembers(source);
+  for(const item of members){if(item.thumbUrl)URL.revokeObjectURL(item.thumbUrl);for(const url of PageEdit.overlayUrls(item))URL.revokeObjectURL(url);}
+  items=items.filter(i=>i.sourceId!==source.id);sources=sources.filter(s=>s!==source);renderSelection();
+  if(source.url)URL.revokeObjectURL(source.url);if(source.pdf)await source.pdf.destroy().catch(()=>{});
 }
-function moveItem(item, delta) {
-  if (busy) return;
-  const index = items.indexOf(item), to = index + delta;
-  if (to < 0 || to >= items.length) return;
-  [items[index], items[to]] = [items[to], items[index]];
-  const scrollTop = $('items').scrollTop;
-  renderSelection(); $('items').scrollTop = scrollTop;
-  document.getElementById(item.id)?.querySelector('[data-move="' + delta + '"]')?.focus();
+function moveSource(source,delta){
+  if(busy)return;const index=sources.indexOf(source),to=index+delta;if(to<0||to>=sources.length)return;
+  [sources[index],sources[to]]=[sources[to],sources[index]];items=sources.flatMap(s=>sourceMembers(s));renderSelection();
+  document.getElementById(source.id)?.querySelector('[data-move="'+delta+'"]').focus();
 }
-function renderSelection() {
-  thumbnailObserver?.disconnect(); makeFileQueue(); $('items').replaceChildren(); $('selection').hidden = !items.length;
-  items.forEach((item, index) => {
-    const card = element('article', 'item-card'); card.id = item.id;
-    const top = element('div', 'item-top'), label = element('label'), check = document.createElement('input');
-    check.type = 'checkbox'; check.dataset.itemCheck = item.id; check.disabled = busy;
-    check.setAttribute('aria-label', '选择 ' + itemLabel(item));
-    check.onchange = () => {item.selected = check.checked; refreshSelection();};
-    label.append(check, element('span', 'item-order', String(index + 1).padStart(2, '0')));
-    top.append(label, element('span', '', item.kind === 'pdf' ? 'PDF' : item.kind.toUpperCase()));
-    const thumb = element('button', 'item-thumb'); thumb.dataset.itemId = item.id; thumb.disabled = busy;
-    thumb.setAttribute('aria-label', '预览材料 ' + itemLabel(item));
-    if (item.thumbUrl) {const image = new Image(); image.src = item.thumbUrl; image.alt = itemLabel(item); thumb.append(image);}
-    else thumb.append(element('span', 'item-placeholder', '预览加载中…'));
-    thumb.onclick = () => previewItem(item);
-    const title = element('p', 'item-label', item.fileName); title.title = item.fileName;
-    const bottom = element('div', 'item-bottom'), controls = element('div');
-    bottom.append(element('small', '', item.page ? '第 ' + item.page + ' 页' : Math.round(PageEdit.dimensions(item).width) + ' × ' + Math.round(PageEdit.dimensions(item).height)));
-    for (const delta of [-1, 1]) {
-      const button = element('button');button.append(icon(delta===-1?'up':'down')); button.dataset.move = delta;
-      button.dataset.boundary = String(delta === -1 ? index === 0 : index === items.length - 1);
-      button.disabled = busy || button.dataset.boundary === 'true';
-      button.setAttribute('aria-label', (delta === -1 ? '前移 ' : '后移 ') + itemLabel(item)); button.onclick = () => moveItem(item, delta); controls.append(button);
-    }
-    bottom.append(controls); card.append(top, thumb, title, bottom);
-    const editRow=element('div','item-edit-row'),editButton=element('button','item-edit-button','编辑');
-    editButton.disabled=busy;editButton.setAttribute('aria-label','编辑 '+itemLabel(item));editButton.onclick=()=>{if(!busy)PageEdit.open(item);};
-    editRow.append(editButton,element('span','edited-tag',PageEdit.changed(item)?'已编辑':''));card.append(editRow);
-    $('items').append(card);
-  });
-  refreshSelection(); observeThumbnails();
+function renderSelection(){
+  thumbnailObserver?.disconnect();$('items').replaceChildren();$('selection').hidden=!sources.length;$('file-actions').hidden=!sources.length;
+  sources.forEach((source,index)=>{
+    const members=sourceMembers(source),cover=members.find(i=>i.selected)||members[0];if(!cover)return;
+    const card=element('article','item-card file-card');card.id=source.id;
+    const top=element('div','item-top'),label=element('label'),check=document.createElement('input');check.type='checkbox';check.dataset.fileCheck=source.id;check.disabled=busy;check.setAttribute('aria-label','选择文件 '+source.file.name);
+    check.onchange=()=>{members.forEach(i=>i.selected=check.checked);refreshSelection();};label.append(check,element('span','item-order',String(index+1).padStart(2,'0')));
+    const remove=element('button','file-remove batch-control');UIIcons.set(remove,'close','移除 '+source.file.name);remove.onclick=()=>removeSource(source);remove.disabled=busy;top.append(label,remove);
+    const thumb=element('button','item-thumb');thumb.dataset.itemId=cover.id;thumb.disabled=busy;thumb.setAttribute('aria-label','打开 '+source.file.name);thumb.title='编辑 '+source.file.name;
+    if(cover.thumbUrl){const im=new Image();im.src=cover.thumbUrl;im.alt=source.file.name;thumb.append(im);}else thumb.append(element('span','item-placeholder','预览加载中…'));
+    thumb.onclick=()=>openSource(source);
+    if(source.kind==='pdf')thumb.append(element('span','file-page-badge',members.length+' 页'));
+    const title=element('p','item-label',source.file.name);title.title=source.file.name;
+    const meta=element('p','file-meta');meta.dataset.fileCount=source.id;
+    const bottom=element('div','file-actions'),status=element('span','edited-tag',members.some(i=>PageEdit.changed(i))?'已编辑':'');
+    const tools=element('div','file-tools');
+    for(const delta of [-1,1]){const button=element('button','batch-control');UIIcons.set(button,delta<0?'up':'down',(delta<0?'前移文件 ':'后移文件 ')+source.file.name);button.dataset.move=delta;button.dataset.boundary=String(delta<0?index===0:index===sources.length-1);button.disabled=busy||button.dataset.boundary==='true';button.onclick=()=>moveSource(source,delta);tools.append(button);}
+    const edit=element('button','item-edit-button');UIIcons.set(edit,'edit','编辑 '+source.file.name);edit.disabled=busy;edit.onclick=()=>openSource(source);tools.append(edit);
+    bottom.append(status,tools);card.append(top,thumb,title,meta,bottom);$('items').append(card);
+  });refreshSelection();observeThumbnails();
 }
 function observeThumbnails() {
   thumbnailObserver?.disconnect();
@@ -165,10 +127,10 @@ function observeThumbnails() {
           const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', .78));
           if (!blob || !items.includes(item)) return;
           item.thumbUrl = URL.createObjectURL(blob);
-          const target = document.getElementById(item.id)?.querySelector('.item-thumb');
-          if (target) {const image = new Image(); image.src = item.thumbUrl; image.alt = itemLabel(item); target.replaceChildren(image);}
+          const target = document.querySelector('.item-thumb[data-item-id="'+item.id+'"]');
+          if (target) {const image = new Image(); image.src = item.thumbUrl; image.alt = itemLabel(item); target.querySelectorAll('img,.item-placeholder').forEach(n=>n.remove());target.prepend(image);}
         } catch {
-          const target = document.getElementById(item.id)?.querySelector('.item-placeholder');
+          const target = document.querySelector('.item-thumb[data-item-id="'+item.id+'"] .item-placeholder');
           if (target) target.textContent = '点击查看材料';
         } finally {if (canvas) canvas.width = canvas.height = 1;}
       }).finally(() => {item.thumbPending = false;});
@@ -204,6 +166,14 @@ async function renderItem(item,targetWidth,maxHeight=16000) {return PageEdit.ren
 function invalidateThumbnail(item) {if (item.thumbUrl) URL.revokeObjectURL(item.thumbUrl);item.thumbUrl=null;}
 PageEdit.init({
   onBusy:value=>{setBusy(value);if (!value) observeThumbnails();},renderOriginal:renderOriginalItem,waitThumbnails:()=>thumbnailChain,
+  onFileCommit:entries=>{
+    const sourceId=entries[0].item.sourceId;
+    for(const entry of entries){const {item,draft,history}=entry,previous=PageEdit.overlayUrls(item);
+      item.edits={crop:{...draft.crop},overlays:draft.overlays.map(o=>({...o}))};item.orientation={...draft.orientation};item.editHistory=history;item.selected=entry.selected;
+      const retained=PageEdit.overlayUrls(item);for(const url of previous)if(!retained.has(url))URL.revokeObjectURL(url);invalidateThumbnail(item);
+    }
+    items=sources.flatMap(source=>source.id===sourceId?entries.map(e=>e.item):sourceMembers(source));renderSelection();message('');
+  },
   onCommit:(item,edits,applyAll,history)=>{
     const previous=PageEdit.overlayUrls(item);
     item.edits={crop:{...edits.crop},overlays:edits.overlays.map(o=>({...o}))};item.orientation={...edits.orientation};item.editHistory=history;
@@ -274,7 +244,7 @@ for (const button of document.querySelectorAll('[data-mode]')) button.onclick = 
 };
 function openPreview(url, name) {
   disposePdfPreview(); $('pdf-preview-nav').hidden = true;
-  $('preview-image').classList.remove('actual-size'); $('preview-zoom').textContent = '原尺寸查看';
+  $('preview-image').classList.remove('actual-size'); UIIcons.set($('preview-zoom'),'expand','原尺寸查看');
   $('preview-image').src = url; $('preview-image').alt = name; $('preview-title').textContent = name; $('preview').showModal(); $('preview-scroll').scrollTop = 0;
 }
 async function previewItem(item) {
@@ -290,7 +260,7 @@ async function previewItem(item) {
   } catch (error) {if (error.name !== 'AbortError') message('无法预览此项材料，请尝试移除后重新添加。');}
   finally {if (canvas) canvas.width = canvas.height = 1; setBusy(false); $('cancel').disabled = true; observeThumbnails();}
 }
-$('preview-zoom').onclick = () => {const actual = $('preview-image').classList.toggle('actual-size'); $('preview-zoom').textContent = actual ? '适应窗口' : '原尺寸查看';};
+$('preview-zoom').onclick = () => {const actual = $('preview-image').classList.toggle('actual-size'); UIIcons.set($('preview-zoom'),'expand',actual?'适应窗口':'原尺寸查看');};
 $('close-preview').onclick = () => $('preview').close();
 $('preview').onclick = e => {if (e.target === $('preview')) $('preview').close();};
 $('preview').onclose = () => {disposePdfPreview(); if (previewUrl) {URL.revokeObjectURL(previewUrl); previewUrl = null;} $('preview-image').removeAttribute('src');};
@@ -302,7 +272,7 @@ function disposePdfPreview() {
 async function openPdfPreview(result) {
   disposePdfPreview(); const serial = previewSerial;
   $('preview-image').src = result.previewUrl; $('preview-image').alt = result.name;
-  $('preview-image').classList.remove('actual-size'); $('preview-zoom').textContent = '原尺寸查看';
+  $('preview-image').classList.remove('actual-size'); UIIcons.set($('preview-zoom'),'expand','原尺寸查看');
   $('preview-title').textContent = result.name; $('pdf-preview-nav').hidden = false;
   $('pdf-prev').disabled = $('pdf-next').disabled = true; $('pdf-page-count').textContent = '正在读取 PDF…';
   $('preview').showModal(); $('preview-scroll').scrollTop = 0;
@@ -451,3 +421,5 @@ $('download-all').onclick = async () => {
   finally {setBusy(false); $('download-all').textContent = '打包下载 ZIP'; observeThumbnails();}
 };
 setLimit(200);
+
+for(const [id,name,label]of [['select-all','selectAll','全选文件'],['select-none','selectNone','全不选文件'],['reset-size','reset','恢复默认大小'],['clear','trash','清空结果'],['preview-zoom','expand','原尺寸查看'],['close-preview','close','关闭预览'],['pdf-prev','left','上一页'],['pdf-next','right','下一页']])UIIcons.set($(id),name,label);

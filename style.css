@@ -57,3 +57,5 @@ dialog{color:var(--ink);border:0;padding:24px;border-radius:12px;background:#fff
 
 /* A single header, followed directly by the workbench. */
 .brand h1{font:inherit;line-height:1.2;letter-spacing:inherit;margin:0}.header-tools{display:flex;align-items:center;gap:24px;margin-left:auto}.header-tools .privacy{margin-left:0}.header-tools .quick-help summary{padding:10px 0;text-decoration:none}.header-tools .quick-help>div{top:calc(100% + 14px)}main#workbench{padding-top:28px}
+
+.brand-descriptor{font-size:13px;line-height:1.5;color:var(--muted);padding-left:18px;border-left:1px solid var(--line);white-space:nowrap}.help-trigger{font-size:13px;color:var(--muted);border:0;background:transparent;padding:10px 0;text-decoration:underline;text-decoration-color:#b7a88f;text-underline-offset:5px;text-decoration-thickness:1px}.help-trigger:hover{color:var(--accent)}.header-tools .quick-help>.help-panel{top:calc(100% + 14px)}.help-panel::before{content:"";position:absolute;left:0;right:0;top:-14px;height:14px}

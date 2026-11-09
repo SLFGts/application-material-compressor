@@ -423,3 +423,17 @@ $('download-all').onclick = async () => {
 setLimit(200);
 
 for(const [id,name,label]of [['select-all','selectAll','全选文件'],['select-none','selectNone','全不选文件'],['reset-size','reset','恢复默认大小'],['clear','trash','清空结果'],['preview-zoom','expand','原尺寸查看'],['close-preview','close','关闭预览'],['pdf-prev','left','上一页'],['pdf-next','right','下一页']])UIIcons.set($(id),name,label);
+
+// Header help opens on hover or keyboard focus, and stays open across the popup gap.
+{
+  const help=document.querySelector('.quick-help'),trigger=help.querySelector('.help-trigger'),panel=$('usage-help');
+  let closeTimer;
+  const show=()=>{clearTimeout(closeTimer);panel.hidden=false;trigger.setAttribute('aria-expanded','true');};
+  const hide=()=>{clearTimeout(closeTimer);panel.hidden=true;trigger.setAttribute('aria-expanded','false');};
+  help.addEventListener('pointerenter',show);
+  help.addEventListener('pointerleave',()=>{if(!trigger.matches(':focus-visible'))closeTimer=setTimeout(hide,180);});
+  trigger.addEventListener('focus',()=>{if(trigger.matches(':focus-visible'))show();});
+  trigger.addEventListener('click',show);
+  help.addEventListener('focusout',e=>{if(!help.contains(e.relatedTarget)&&!help.matches(':hover'))hide();});
+  help.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();hide();}});
+}

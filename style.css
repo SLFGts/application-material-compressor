@@ -54,3 +54,6 @@ dialog{color:var(--ink);border:0;padding:24px;border-radius:12px;background:#fff
 @media(max-width:780px){.file-tools .icon-button{width:44px;min-width:44px}.editor-pages-head .icon-button{height:44px;min-height:44px}}@media(max-width:370px){.items{grid-template-columns:1fr}}
 
 @media(max-width:780px){.editor-pages-head .icon-button svg{transform:rotate(-90deg)}}
+
+/* A single header, followed directly by the workbench. */
+.brand h1{font:inherit;line-height:1.2;letter-spacing:inherit;margin:0}.header-tools{display:flex;align-items:center;gap:24px;margin-left:auto}.header-tools .privacy{margin-left:0}.header-tools .quick-help summary{padding:10px 0;text-decoration:none}.header-tools .quick-help>div{top:calc(100% + 14px)}main#workbench{padding-top:28px}
